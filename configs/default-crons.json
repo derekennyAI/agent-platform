@@ -16,5 +16,33 @@
     "isolated": true,
     "timeout_minutes": 3,
     "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_heartbeat",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 */6 * * *",
+    "task_description": "Heartbeat check: Verify core systems are functional. Check MCP server connectivity (call my_skills), vault access (call get_credential for a known key), and disk space. If anything is down, log to memory/sessions/ and alert the user via their preferred channel.",
+    "isolated": true,
+    "timeout_minutes": 3,
+    "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_token_refresh",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 */2 * * *",
+    "task_description": "Token refresh: Check OAuth tokens for connected services (Google, Microsoft, etc.). If any token expires within the next 2 hours, refresh it using the refresh_token grant and update both the vault and disk copy. Log refreshes to memory/sessions/.",
+    "isolated": true,
+    "timeout_minutes": 3,
+    "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_qmd_refresh",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 */2 * * *",
+    "task_description": "QMD index refresh: If QMD is installed, run 'qmd update && qmd embed' to re-index memory files, skills, and docs for semantic search. Skip silently if QMD is not available.",
+    "isolated": true,
+    "timeout_minutes": 5,
+    "enabled": false,
+    "note": "Enable after installing QMD (optional on-device semantic search)"
   }
 ]
