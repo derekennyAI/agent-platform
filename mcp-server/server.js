@@ -1041,6 +1041,105 @@ server.tool(
 );
 
 // ==========================================
+// MODULE 4b: Agent State (Supabase-backed)
+// ==========================================
+// Read/write idempotency markers and state tracking.
+// Replaces local state files (pill_pending, usage_alerts_sent, etc.)
+
+server.tool(
+  "get_state",
+  "Get a state value for the current agent. Used for idempotency markers, tracking state, etc.",
+  {
+    key: z.string().describe("State key (e.g. 'pill_reminder', 'usage_alerts_sent', 'liability_accepted')"),
+  },
+  async ({ key }) => {
+    const rows = await supabaseQuery("agent_state", "GET", {
+      "agent_name": `eq.${AGENT_NAME}`,
+      "key": `eq.${key}`,
+    }) || [];
+
+    if (rows.length === 0) {
+      return { content: [{ type: "text", text: JSON.stringify({ found: false, key, agent: AGENT_NAME }) }] };
+    }
+
+    return { content: [{ type: "text", text: JSON.stringify({
+      found: true,
+      key,
+      agent: AGENT_NAME,
+      value: rows[0].value,
+      updated_at: rows[0].updated_at,
+    }, null, 2) }] };
+  }
+);
+
+server.tool(
+  "set_state",
+  "Set a state value for the current agent. Upserts — creates if new, updates if exists. Use for idempotency markers, tracking what already happened.",
+  {
+    key: z.string().describe("State key"),
+    value: z.any().describe("State value (any JSON-serializable object)"),
+  },
+  async ({ key, value }) => {
+    await supabaseQuery("agent_state", "POST", {
+      body: {
+        agent_name: AGENT_NAME,
+        key,
+        value: typeof value === "object" ? value : { value },
+        updated_at: new Date().toISOString(),
+      },
+      headers: { "Prefer": "resolution=merge-duplicates" },
+    });
+
+    return { content: [{ type: "text", text: JSON.stringify({
+      success: true,
+      key,
+      agent: AGENT_NAME,
+      message: "State saved.",
+    }) }] };
+  }
+);
+
+server.tool(
+  "delete_state",
+  "Delete a state key for the current agent.",
+  {
+    key: z.string().describe("State key to delete"),
+  },
+  async ({ key }) => {
+    await supabaseQuery("agent_state", "DELETE", {
+      "agent_name": `eq.${AGENT_NAME}`,
+      "key": `eq.${key}`,
+    });
+
+    return { content: [{ type: "text", text: JSON.stringify({
+      success: true,
+      key,
+      agent: AGENT_NAME,
+      message: "State deleted.",
+    }) }] };
+  }
+);
+
+server.tool(
+  "list_state",
+  "List all state keys for the current agent.",
+  {},
+  async () => {
+    const rows = await supabaseQuery("agent_state", "GET", {
+      "agent_name": `eq.${AGENT_NAME}`,
+      "select": "key,updated_at",
+      "order": "key",
+    }) || [];
+
+    return { content: [{ type: "text", text: JSON.stringify({
+      agent: AGENT_NAME,
+      count: rows.length,
+      keys: rows.map(r => ({ key: r.key, updated_at: r.updated_at })),
+    }, null, 2) }] };
+  }
+);
+
+// ==========================================
 // MODULE 5: Analytics & Logging
 // ==========================================
 // Agents write interaction logs and infra events to Supabase.
