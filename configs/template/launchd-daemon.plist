@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-code.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>{{HOME}}/.claude/launcher.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>{{HOME}}</string>
+        <key>AGENT_NAME</key>
+        <string>{{AGENT_NAME}}</string>
+        <key>ANTHROPIC_API_KEY</key>
+        <string>{{ANTHROPIC_API_KEY}}</string>
+        <key>SUPABASE_URL</key>
+        <string>{{SUPABASE_URL}}</string>
+        <key>SUPABASE_SERVICE_KEY</key>
+        <string>{{SUPABASE_SERVICE_KEY}}</string>
+        <key>CLAUDE_CODE_OAUTH_TOKEN</key>
+        <string>{{CLAUDE_CODE_OAUTH_TOKEN}}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/.claude/daemon-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/.claude/daemon-stderr.log</string>
+</dict>
+</plist>
