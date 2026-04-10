@@ -1,0 +1,20 @@
+[
+  {
+    "id": "sched_{{AGENT_NAME}}_session_memory",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "*/30 * * * *",
+    "task_description": "Session memory review: Check for idle conversations (no messages in 10+ min after active chat). If idle, write a session summary to memory/sessions/YYYY-MM-DD_HH.md. Include: what was discussed, what was done, decisions made, open items. Extract any new user preferences, feedback, or failed approaches into memory files. Background task, don't message the user.",
+    "isolated": true,
+    "timeout_minutes": 5,
+    "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_admin_poll",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "*/5 * * * *",
+    "task_description": "Check for pending admin tasks: call list_pending_tasks, process any that are assigned to you. Execute the task, then mark it complete. This is how the admin agent communicates with you.",
+    "isolated": true,
+    "timeout_minutes": 3,
+    "enabled": true
+  }
+]
