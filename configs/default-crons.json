@@ -44,5 +44,51 @@
     "timeout_minutes": 5,
     "enabled": false,
     "note": "Enable after installing QMD (optional on-device semantic search)"
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_security_audit",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 * * * *",
+    "task_description": "Security audit: Run the security watch script to scan for suspicious file changes, unauthorized workspace access, and unexpected processes. Check for modified CLAUDE.md or .mcp.json files (tampering indicators). Log findings to memory/sessions/. Alert the user immediately if anything suspicious is found.",
+    "isolated": true,
+    "timeout_minutes": 3,
+    "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_inbox_check",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 * * * *",
+    "task_description": "Inbox check: If Gmail is connected, scan all connected email accounts for unread messages. Flag anything important or actionable to the user via their preferred channel. Stay quiet if nothing notable. Background task.",
+    "isolated": true,
+    "timeout_minutes": 3,
+    "enabled": false,
+    "note": "Enable after connecting Gmail via gmail_connect.py"
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_daily_digest",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 21 * * *",
+    "task_description": "Daily digest: Compile a summary of today's activity — sessions held, tasks completed, memories saved, scheduled tasks that ran, any errors or alerts. Send a brief digest to the user via their preferred channel. Include any open items or things that need their attention tomorrow.",
+    "isolated": true,
+    "timeout_minutes": 5,
+    "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_daily_memory_compact",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 3 * * *",
+    "task_description": "Daily memory compaction: Review today's session summaries in memory/sessions/. Merge overlapping sessions from the same day into a single daily summary file (YYYY-MM-DD.md). Deduplicate any memory files that were created with near-identical content during the day. Update MEMORY.md index if any memories were merged or removed. Prune session files older than 30 days (keep the daily summary, delete the hourly ones).",
+    "isolated": true,
+    "timeout_minutes": 10,
+    "enabled": true
+  },
+  {
+    "id": "sched_{{AGENT_NAME}}_weekly_memory_review",
+    "agent_name": "{{AGENT_NAME}}",
+    "schedule": "0 4 * * 0",
+    "task_description": "Weekly memory review: Deep review of all memory files. Check for: (1) Stale project memories — projects that were completed or abandoned, mark them or remove. (2) Contradictory feedback — newer feedback that supersedes older feedback, merge them. (3) Outdated references — external resources that may have moved or changed. (4) MEMORY.md index health — ensure all entries point to real files, no orphans, under 200 lines. (5) Write a weekly memory health report to memory/sessions/YYYY-MM-DD_weekly.md. This is deep maintenance, not a quick scan.",
+    "isolated": true,
+    "timeout_minutes": 15,
+    "enabled": true
   }
 ]
