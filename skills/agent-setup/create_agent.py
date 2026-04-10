@@ -29,12 +29,30 @@ HOME = Path.home()
 CLAUDE_DIR = HOME / ".claude"
 CHANNELS_DIR = CLAUDE_DIR / "channels"
 LAUNCH_AGENTS_DIR = HOME / "Library" / "LaunchAgents"
-AGENTS_REGISTRY = Path(__file__).parent / "agents.json"
+PLATFORM_DIR = Path(__file__).resolve().parent.parent.parent  # agent-platform/
+AGENTS_REGISTRY = PLATFORM_DIR / "configs" / "agents.json"
 
-# Shared credentials — all agents run on Farlen's Max subscription
+# Load .env from platform root if it exists
+ENV_FILE = PLATFORM_DIR / ".env"
+if ENV_FILE.exists():
+    for line in ENV_FILE.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip())
+
+def require_env(key):
+    val = os.environ.get(key)
+    if not val or val.startswith("sk-ant-...") or val.startswith("eyJ..."):
+        print(f"ERROR: {key} not set. Add it to .env or export it.")
+        sys.exit(1)
+    return val
+
 SHARED_ENV_VARS = {
-    "ANTHROPIC_API_KEY": "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",
-    "CLAUDE_CODE_OAUTH_TOKEN": "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",
+    "ANTHROPIC_API_KEY": require_env("ANTHROPIC_API_KEY"),
+    "CLAUDE_CODE_OAUTH_TOKEN": os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", ""),
+    "SUPABASE_URL": os.environ.get("SUPABASE_URL", ""),
+    "SUPABASE_SERVICE_KEY": require_env("SUPABASE_SERVICE_KEY"),
     "HOME": str(HOME),
     "PATH": "/opt/homebrew/bin:$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.orbstack/bin",
 }
@@ -467,15 +485,17 @@ Note: You can help with:
     (ws / "startup-instructions.md").write_text(startup)
 
     # --- .mcp.json (admin-control MCP server) ---
+    mcp_server_path = str(PLATFORM_DIR / "mcp-server" / "server.js")
     mcp_config = {
         "mcpServers": {
             "admin-control": {
                 "type": "stdio",
                 "command": "node",
-                "args": [str(HOME / "derek" / "skills" / "admin-mcp" / "server.js")],
+                "args": [mcp_server_path],
                 "env": {
                     "AGENT_NAME": name,
-                    "SUPABASE_SERVICE_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mcnpoaWp2ZmJ3dW11dGFqcWVoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjgzNDMyNywiZXhwIjoyMDg4NDEwMzI3fQ.W6AmTsNcMNo4LHZcjKCOVgzWPasciEtM9KhLAkeKDKE",
+                    "SUPABASE_URL": os.environ.get("SUPABASE_URL", ""),
+                    "SUPABASE_SERVICE_KEY": require_env("SUPABASE_SERVICE_KEY"),
                 },
             }
         }
@@ -772,7 +792,6 @@ def main():
     print(f"  Tmux:       {name}-agent")
     print(f"  Daemon:     com.{name}-agent.daemon")
     print(f"  Bot:        {bot_info}")
-    print(f"  Dashboard:  https://dereks-macbook-pro.tailf80e44.ts.net")
     print(f"\n  {args.human} can now message {bot_info} on Telegram.\n")
 
 

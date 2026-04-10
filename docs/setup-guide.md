@@ -8,111 +8,155 @@ Complete walkthrough for setting up the Agent Platform from scratch.
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed
 - Node.js 18+ (`brew install node`)
 - Python 3.10+ (comes with macOS)
+- tmux (`brew install tmux`)
 - A [Supabase](https://supabase.com/) project
 - An Anthropic API key or Claude Max subscription
 
-## Step 1: Clone and Configure
+## Step 1: Clone and Run Setup
 
 ```bash
 git clone https://github.com/derekennyAI/agent-platform.git
 cd agent-platform
-cp .env.example .env
+./setup.sh
 ```
 
-Edit `.env` with your credentials:
+First run creates `.env` from the template. Edit it with your credentials:
 - `ANTHROPIC_API_KEY` — from console.anthropic.com
 - `SUPABASE_URL` — your Supabase project URL
 - `SUPABASE_SERVICE_KEY` — from Supabase Settings > API > service_role key
 
+Then run `./setup.sh` again. It will install dependencies, set up the scheduler crontab, and guide you through the rest.
+
 ## Step 2: Database Setup
 
-1. Go to your Supabase dashboard > SQL Editor
-2. Paste and run the contents of `schema/create_harness_schema.sql`
-3. This creates: `skills`, `skill_permissions`, `agent_credentials`, `admin_tasks`
+Go to your Supabase dashboard > SQL Editor and run the contents of `schema/create_harness_schema.sql`.
 
-## Step 3: MCP Server
+This creates 11 tables:
+- `agents` — agent registry
+- `scheduled_tasks` — persistent cron jobs
+- `skills` / `skill_permissions` — capability catalog and access control
+- `agent_sessions` / `interaction_logs` — conversation tracking
+- `infra_events` — centralized infrastructure logging
+- `agent_credentials` — scoped credential vault
+- `agent_state` — persistent key-value state with local fallback
+- `agent_analytics` — usage events
+- `admin_tasks` — inter-agent task queue
+
+## Step 3: Create Your First Agent
 
 ```bash
-cd mcp-server
-npm install
-cd ..
+python3 skills/agent-setup/create_agent.py \
+  --name alex \
+  --persona "Alex" \
+  --human "Your Name" \
+  --bot-token "123456:ABC-your-telegram-bot-token" \
+  --user-id "your-telegram-user-id" \
+  --timezone "America/New_York"
 ```
 
-The MCP server runs automatically when agents start — no separate daemon needed.
+**Need a Telegram bot?** Message @BotFather on Telegram, send `/newbot`, follow prompts.
+**Need your Telegram user ID?** Message @userinfobot on Telegram.
 
-## Step 4: Create Your First Agent
-
-```bash
-source .env
-python3 skills/agent-setup/create_agent.py
-```
-
-Follow the prompts. This creates:
-- Agent workspace at `~/<agent-name>/`
-- CLAUDE.md with the agent's identity
-- .mcp.json connecting to the MCP server
+This creates:
+- Agent workspace at `~/alex/`
+- CLAUDE.md with the agent's identity and safety rules
+- Memory system (soul file, user profile, feedback log, MEMORY.md index)
+- Settings (model selection, permissions)
+- Startup instructions
+- MCP server connection (.mcp.json)
+- Telegram channel configuration
 - LaunchAgent plist for the daemon
+
+## Step 4: Load Default Crons
+
+```bash
+python3 scripts/load_crons.py --agent alex
+```
+
+This pushes the default scheduled tasks into Supabase:
+- Session memory compaction (every 30 min)
+- Admin task polling (every 5 min)
+- Heartbeat check (every 6 hours)
+- OAuth token refresh (every 2 hours)
+- QMD index refresh (every 2 hours)
+- Security audit (hourly)
+- Daily memory compaction (3 AM)
+- Weekly memory review (Sunday 4 AM)
+
+Preview first with `--dry-run`:
+```bash
+python3 scripts/load_crons.py --agent alex --dry-run
+```
 
 ## Step 5: Start the Agent
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.<agent-name>.daemon.plist
+launchctl load ~/Library/LaunchAgents/com.alex-agent.daemon.plist
 ```
 
 Check it's running:
 ```bash
-tmux attach -t <agent-name>-agent
+tmux ls                    # Should show alex-agent session
+tmux attach -t alex-agent  # Watch it boot up (Ctrl-B D to detach)
 ```
 
-## Step 6: Set Up Scheduling (Optional)
-
-Add the system crontab entry for the scheduler:
-```bash
-crontab -e
-# Add this line:
-* * * * * /path/to/agent-platform/mcp-server/scheduler_executor.sh >> /tmp/scheduler.log 2>&1
-```
-
-Load default crons for your agent from `configs/default-crons.json`.
-
-## Step 7: Connect Services (Optional)
+## Step 6: Connect Services (Optional)
 
 ### Gmail / Google Calendar
+Your agent can walk users through this. Or run the OAuth server manually:
 ```bash
-python3 skills/agent-setup/gmail_connect.py --agent <name>
+python3 scripts/claude_oauth_server.py
 ```
-
-You'll need a Google Cloud project with OAuth credentials. Follow the prompts.
+Then tell the agent "connect my Gmail" — it sends the user an auth link.
 
 ### Telegram
-1. Create a bot via @BotFather on Telegram
-2. Install the Claude Code Telegram channels plugin
-3. Configure the bot token in the agent's launcher
+Already configured by `create_agent.py`. The user just messages the bot.
 
-## Step 8: Security Monitoring (Optional)
+### Microsoft 365
+Same OAuth server supports Microsoft. Agent sends user the auth link when asked.
 
-```bash
-# Add hourly security check to crontab
-crontab -e
-# Add:
-0 * * * * python3 /path/to/agent-platform/scripts/security_watch.py
-```
+### Notion
+Agent walks user through creating an internal integration at notion.so/my-integrations.
 
 ## Verifying Everything Works
 
 1. **Agent running**: `tmux ls` shows the agent session
-2. **MCP server**: Agent can use `my_skills` and `list_skill_catalog`
+2. **MCP tools**: Agent responds to messages and can use `my_skills`
 3. **Vault**: `store_credential` and `get_credential` work
-4. **Scheduler**: Check `scheduler_executor.sh` logs
-5. **Gmail**: Agent can read inbox via `gmail_inbox.py`
+4. **Scheduler**: Check `/tmp/scheduler.log` for executor output
+5. **State**: Agent can use `get_state` / `set_state`
 
 ## Adding More Agents
 
-Just run `create_agent.py` again with a new name. Each agent gets its own workspace, credentials, and permissions — completely isolated from other agents.
+Run `create_agent.py` again with a new name. Each agent gets its own workspace, credentials, and permissions — completely isolated.
+
+```bash
+python3 skills/agent-setup/create_agent.py \
+  --name jordan \
+  --persona "Jordan" \
+  --human "Another User" \
+  --bot-token "different-bot-token" \
+  --user-id "their-telegram-id"
+
+python3 scripts/load_crons.py --agent jordan
+launchctl load ~/Library/LaunchAgents/com.jordan-agent.daemon.plist
+```
+
+## Stopping / Restarting Agents
+
+```bash
+# Stop
+launchctl unload ~/Library/LaunchAgents/com.alex-agent.daemon.plist
+
+# Restart
+launchctl unload ~/Library/LaunchAgents/com.alex-agent.daemon.plist
+launchctl load ~/Library/LaunchAgents/com.alex-agent.daemon.plist
+```
 
 ## Troubleshooting
 
-- **Agent won't start**: Check `~/.claude/daemon-stderr.log`
+- **Agent won't start**: Check `~/alex/daemon-stderr.log`
 - **MCP tools not working**: Verify `.mcp.json` has correct paths and env vars
-- **Vault errors**: Ensure `SUPABASE_SERVICE_KEY` is set in the plist
-- **Scheduler not firing**: Check crontab entry and `scheduler_executor.sh` permissions
+- **Vault errors**: Ensure `SUPABASE_SERVICE_KEY` is in the launchd plist
+- **Scheduler not firing**: Check `crontab -l` for the executor entry, verify `scheduler_executor.sh` is executable
+- **Telegram not connecting**: Verify bot token with `curl https://api.telegram.org/bot<TOKEN>/getMe`

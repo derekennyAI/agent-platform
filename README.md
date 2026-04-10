@@ -5,11 +5,15 @@ A complete platform for running persistent AI agents powered by Claude Code. Eac
 ## What you get
 
 - **Persistent agents** that run 24/7 as macOS daemons (launchd + tmux)
+- **Supabase-backed state** — scheduled tasks, credentials, analytics, and agent state all persist in the database with automatic local fallback
 - **Credential vault** — OAuth tokens and API keys stored in Supabase, scoped per agent
 - **Dynamic skills** — agents can use and build new capabilities on the fly
 - **Workspace isolation** — each agent has its own directory, credentials, and permissions
-- **Scheduled tasks** — cron-like automation (reports, monitoring, reminders)
+- **Scheduled tasks** — cron-like automation managed via MCP tools, persisted in Supabase
+- **Write-through cache** — all DB writes sync to local files automatically; reads fall back to local if Supabase is down
 - **Multi-channel communication** — Telegram, iMessage, email
+- **Multi-agent coordination** — admin tasks queue, inter-agent communication
+- **Memory system** — persistent file-based memory that builds over time
 - **Security** — post-build skill validation, workspace isolation, credential scoping
 
 ## Prerequisites
@@ -18,136 +22,211 @@ A complete platform for running persistent AI agents powered by Claude Code. Eac
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed
 - [Node.js](https://nodejs.org/) 18+
 - Python 3.10+
+- [tmux](https://github.com/tmux/tmux) (`brew install tmux`)
 - A [Supabase](https://supabase.com/) project (free tier works)
-- An [Anthropic API key](https://console.anthropic.com/) or Claude Max subscription
+- An Anthropic API key or Claude Max subscription
 
 ## Quick Start
-
-### 1. Clone and configure
 
 ```bash
 git clone https://github.com/derekennyAI/agent-platform.git
 cd agent-platform
-cp .env.example .env
-# Edit .env with your API keys
+./setup.sh
 ```
 
-### 2. Set up the database
+The setup script will:
+1. Check prerequisites (node, python3, tmux, claude)
+2. Create `.env` from template (edit with your API keys)
+3. Install MCP server dependencies
+4. Check Supabase tables
+5. Set up the scheduler crontab entry
+6. Guide you through creating your first agent
 
-Run the SQL in `schema/create_harness_schema.sql` in your Supabase SQL editor. This creates the tables for:
-- `skills` — skill catalog
-- `skill_permissions` — which agent can use which skill
-- `agent_credentials` — encrypted credential vault
-- `admin_tasks` — inter-agent communication
-
-### 3. Install MCP server dependencies
+### Create your first agent
 
 ```bash
-cd mcp-server
-npm install
-cd ..
+python3 skills/agent-setup/create_agent.py \
+  --name myagent \
+  --persona "Alex" \
+  --human "Your Name" \
+  --bot-token "123456:ABC..." \
+  --user-id "your-telegram-id"
 ```
 
-### 4. Create your first agent
+### Load default scheduled tasks
 
 ```bash
-python3 skills/agent-setup/create_agent.py
+python3 scripts/load_crons.py --agent myagent
 ```
 
-This will:
-- Create the agent's workspace directory
-- Generate CLAUDE.md with the agent's identity
-- Set up .mcp.json for MCP server access
-- Create the launchd plist for the daemon
-- Register the agent in the database
-
-### 5. Start the agent
+### Start the agent
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.<agent-name>.daemon.plist
+launchctl load ~/Library/LaunchAgents/com.myagent-agent.daemon.plist
 ```
 
-Your agent is now running. Connect it to Telegram or iMessage to start chatting.
+Your agent is now running. Message it on Telegram.
 
 ## Architecture
 
 ```
-agent-platform/           # This repo — the shared platform
-├── mcp-server/           # MCP admin-control server (Node.js)
-│   ├── server.js         # MCP tools: credentials, skills, scheduling
-│   ├── vault_client.py   # Python vault access library
-│   ├── vault_template.py # Importable module for skill scripts
-│   └── skill_validator.py # Post-build security scanner
-├── skills/               # Reusable skills (available to all agents)
-│   ├── skill-maker/      # Meta-skill: builds new skills
-│   ├── shell/            # Shell command execution + Gmail tools
-│   ├── agent-setup/      # Agent creation + OAuth connection
-│   ├── playwright/       # Browser automation
-│   ├── diagnose/         # System diagnostics
-│   └── ux-review/        # UX analysis
-├── schema/               # Supabase database schema
-├── configs/              # Agent config templates
-├── launchers/            # Daemon plist templates
-└── scripts/              # Security monitoring
+agent-platform/               # This repo — the shared platform
+├── setup.sh                   # One-command setup
+├── mcp-server/                # MCP admin-control server (Node.js)
+│   ├── server.js              # MCP tools: vault, skills, scheduling, state
+│   ├── scheduler_executor.sh  # Fires due tasks (runs every minute via crontab)
+│   ├── infra_lib.sh           # Structured logging library
+│   ├── vault_client.py        # Python vault access library
+│   ├── vault_template.py      # Importable module for skill scripts
+│   └── skill_validator.py     # Post-build security scanner
+├── skills/                    # Reusable skills (available to all agents)
+│   ├── skill-maker/           # Meta-skill: builds new skills
+│   ├── shell/                 # Shell command execution + Gmail tools
+│   ├── agent-setup/           # Agent creation + OAuth connection
+│   ├── playwright/            # Browser automation
+│   ├── frontend-design/       # UI/UX design guidance
+│   ├── diagnose/              # System diagnostics
+│   └── ux-review/             # UX analysis
+├── schema/                    # Supabase database schema (11 tables)
+├── configs/                   # Agent config templates + default crons
+├── scripts/                   # Launcher, cron loader, security monitoring
+│   ├── launcher.sh            # Templated daemon launcher
+│   ├── load_crons.py          # Push default crons to Supabase
+│   ├── claude_oauth_server.py # OAuth callback server (Google, Microsoft)
+│   ├── security_watch.py      # Hourly security monitoring
+│   └── security_alert.sh      # Alert helper
+└── docs/                      # Guides and documentation
 
-~/agent-name/             # Each agent's workspace (created by setup)
-├── CLAUDE.md             # Agent identity and rules
-├── .mcp.json             # MCP server connection
-├── .config/agent-name/   # Local credential cache
-├── memory/               # Persistent memory files
-└── skills/               # Agent-specific skills (if any)
+~/agent-name/                  # Each agent's workspace (created by setup)
+├── CLAUDE.md                  # Agent identity, safety rules, capabilities
+├── .mcp.json                  # MCP server connection
+├── settings.json              # Model selection + permissions
+├── startup-instructions.md    # What to do on boot
+├── .config/agent-name/        # Local credential cache
+├── .state/                    # Local state cache (write-through from Supabase)
+├── memory/                    # Persistent memory files
+│   ├── MEMORY.md              # Memory index
+│   ├── *_soul.md              # Agent identity/personality
+│   ├── user_*.md              # User profile
+│   ├── feedback.md            # User corrections + confirmed approaches
+│   └── sessions/              # Conversation summaries
+└── analytics.jsonl            # Usage analytics
 ```
 
-## Key Concepts
+## Database Schema
+
+The platform uses 11 Supabase tables (run `schema/create_harness_schema.sql`):
+
+| Table | Purpose |
+|-------|---------|
+| `agents` | Central registry of all agents |
+| `scheduled_tasks` | Persistent cron jobs (Supabase-primary, local fallback) |
+| `skills` | Catalog of available capabilities |
+| `skill_permissions` | Which agent can use which skill |
+| `agent_sessions` | Session metadata and duration |
+| `interaction_logs` | Structured conversation metadata |
+| `infra_events` | Centralized infrastructure logging |
+| `agent_credentials` | Scoped credential vault |
+| `agent_state` | Persistent key-value state (idempotency markers, flags) |
+| `agent_analytics` | Usage events and session logs |
+| `admin_tasks` | Inter-agent task queue |
+
+## MCP Tools
+
+Agents interact with the platform through these MCP tools:
 
 ### Credential Vault
-All credentials are stored in Supabase (`agent_credentials` table), scoped by agent name. Scripts access them via `vault_client.py`:
-
-```python
-from vault_template import get_cred, get_creds
-api_key = get_cred("service_name", "api_key")
-```
-
-### Workspace Isolation
-Each agent runs in its own directory and can only access its own credentials. The MCP server enforces this — `get_credential` automatically scopes to the calling agent's `AGENT_NAME`.
+- `store_credential` — Save a credential (scoped to agent)
+- `get_credential` — Retrieve a credential
+- `list_credentials` — List stored credentials
+- `delete_credential` — Remove a credential
 
 ### Skills
-Skills are capabilities that agents can use. They're registered in the `skills` table and granted via `skill_permissions`. Agents discover available skills with the `my_skills` MCP tool.
+- `my_skills` — List skills granted to this agent
+- `list_skill_catalog` — Browse all available skills
+- `grant_skill` / `revoke_skill` — Manage permissions
 
-### Scheduled Tasks
-Agents can create recurring tasks (crons) via the MCP scheduler. The `scheduler_executor.sh` runs every minute via crontab and executes due tasks.
+### Scheduling
+- `schedule_task` — Create a persistent cron job
+- `list_scheduled_tasks` — View your scheduled tasks
+- `update_scheduled_task` — Modify schedule or description
+- `delete_scheduled_task` — Remove a task
 
-## Building Skills
+### State (Write-Through Cache)
+- `get_state` — Read a state value (Supabase-first, local fallback)
+- `set_state` — Write a state value (both Supabase and local)
+- `delete_state` — Remove a state key
+- `list_state` — List all state keys
 
-Use the `skill-maker` skill or create manually:
+### Admin
+- `list_admin_tasks` — Check for tasks assigned by other agents
+- `complete_admin_task` — Mark a task as done
+- `submit_admin_task` — Assign a task to another agent
 
-1. Create a directory under `skills/`
-2. Write a `SKILL.md` with a description (this is what the agent reads to decide when to use it)
-3. Write scripts using the vault-aware pattern
-4. Run `skill_validator.py` to check for security violations
-5. Register in the database and grant to agents
+## How Scheduling Works
 
-See `skills/skill-maker/SKILL.md` for the full guide including credential patterns.
+1. Agents create/manage crons via MCP tools → stored in Supabase
+2. One system crontab entry runs `scheduler_executor.sh` every minute
+3. The executor reads due tasks from Supabase (falls back to local JSON cache)
+4. Due tasks are fired into the agent's tmux session via `tmux send-keys`
+5. After firing, the executor updates `last_fired_at` in both Supabase and local cache
+
+Agents never touch crontab directly. The executor is the only bridge between the database and the agents.
+
+## Write-Through Cache Pattern
+
+All Supabase-backed data uses the same pattern:
+- **Writes** go to both Supabase AND local files simultaneously
+- **Reads** try Supabase first, fall back to local if unavailable
+- This means agents work offline (local cache) and auto-sync when connectivity returns
 
 ## Connecting Services
 
+### Telegram
+1. Create a bot via @BotFather on Telegram
+2. Pass the bot token to `create_agent.py --bot-token`
+3. The agent's launcher starts Claude Code with the `--channels` flag
+
 ### Gmail / Google Calendar
 ```bash
-python3 skills/agent-setup/gmail_connect.py --agent <name>
+# Start the OAuth server, then tell your agent "connect my Gmail"
+python3 scripts/claude_oauth_server.py
 ```
-Follow the OAuth flow. Tokens are automatically stored in the vault.
 
-### Other Services
-Store credentials manually via the MCP `store_credential` tool, or use `vault_client.py` directly.
+### Microsoft 365
+Same OAuth server supports Microsoft — agent asks user to tap the auth link.
+
+See `docs/connecting-services.md` for full details.
+
+## Multi-Agent Setup
+
+Create additional agents with `create_agent.py`. Each gets:
+- Isolated workspace and credentials
+- Own Telegram bot
+- Own scheduled tasks
+- Communication via `admin_tasks` table
+
+One agent can be designated as "admin" with supervisory access. See `docs/multi-agent.md`.
 
 ## Security
 
 - **Credential scoping**: Each agent can only read its own credentials
 - **Skill permissions**: Agents only see skills they've been granted
-- **Post-build validation**: `skill_validator.py` scans for hardcoded secrets, cross-workspace access, and non-vault credential patterns
-- **Workspace isolation**: Behavioral rules in CLAUDE.md + MCP scoping (true filesystem sandboxing requires Docker — see roadmap)
+- **Post-build validation**: `skill_validator.py` scans for hardcoded secrets, cross-workspace access
+- **Workspace isolation**: Behavioral rules in CLAUDE.md + MCP scoping
 - **Security monitoring**: `security_watch.py` runs hourly via crontab
+- **Double-confirm destructive actions**: Agents require two confirmations before deleting anything
+
+## Documentation
+
+- [Setup Guide](docs/setup-guide.md) — Detailed walkthrough
+- [Memory System](docs/memory-system.md) — How agent memory works
+- [Multi-Agent](docs/multi-agent.md) — Running multiple agents
+- [Connecting Services](docs/connecting-services.md) — Gmail, Microsoft, iCloud, Notion
+- [QMD Setup](docs/qmd-setup.md) — On-device semantic search
+- [Frontend Design](skills/frontend-design/SKILL.md) — UI/UX design skill
+- [Roadmap](docs/roadmap.md) — What's next
 
 ## License
 
-Private — contact enny.ai for licensing.
+MIT — see LICENSE
