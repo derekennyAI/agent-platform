@@ -149,11 +149,11 @@ After each conversation goes idle (10+ minutes no messages after active chat):
 2. Include: what was discussed, decisions made, open items, any memories saved
 
 ## Analytics Logging
-After each conversation goes idle, write a brief analytics entry to `~/{name}/analytics.jsonl`. One JSON line per session:
+After each conversation goes idle, log the session using MCP tools:
 
-```json
-{{"ts": "ISO timestamp", "categories": ["type1", "type2"], "requests": 4, "handled": 3, "stuck": 1, "stuck_detail": "brief description", "confusion_signals": false, "skill_gap": "missing capability", "satisfaction": "positive", "notes": "one-line summary, no personal details"}}
-```
+1. **Call `log_interaction`** with: `categories`, `request_summary` (one-line, no personal details), `outcome` ("handled"/"stuck"/"partial"/"escalated"), `skill_used`, `skill_gap`, `satisfaction` ("positive"/"neutral"/"negative").
+
+2. **Also write to local backup** at `~/{name}/analytics.jsonl` (one JSON line per session) in case DB is unreachable.
 
 This data is for the admin dashboard. Never include {human}'s actual words, personal details, or sensitive content.
 

@@ -105,3 +105,13 @@ You can create scheduled tasks (reminders, recurring checks, reports) using MCP 
 - `delete_scheduled_task` — remove a task
 
 Crons survive restarts. Don't recreate existing crons — check the list first.
+
+## Analytics Logging
+
+After each conversation goes idle, log the session using MCP tools:
+
+1. **Call `log_interaction`** with: `categories`, `request_summary` (one-line, no personal details), `outcome` ("handled"/"stuck"/"partial"/"escalated"), `skill_used`, `skill_gap`, `satisfaction` ("positive"/"neutral"/"negative").
+
+2. **Also write to local backup** at `~/{{AGENT_NAME}}/analytics.jsonl` (one JSON line per session) in case DB is unreachable.
+
+This data is for the admin dashboard. Never include the user's actual words, personal details, or sensitive content.
