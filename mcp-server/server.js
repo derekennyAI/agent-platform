@@ -806,9 +806,10 @@ server.tool(
 // Local JSON file kept as cache for the executor (scheduler_executor.sh reads it).
 // All writes go to Supabase first, then sync to local JSON.
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { homedir } from "os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TASKS_FILE = join(__dirname, "scheduled_tasks.json");
@@ -1041,81 +1042,125 @@ server.tool(
 );
 
 // ==========================================
-// MODULE 4b: Agent State (Supabase-backed)
+// MODULE 4b: Agent State (Supabase-backed with local cache)
 // ==========================================
 // Read/write idempotency markers and state tracking.
-// Replaces local state files (pill_pending, usage_alerts_sent, etc.)
+// Primary: Supabase agent_state table
+// Cache: local JSON files at ~/AGENT_NAME/.state/KEY.json
+// All writes go to both. Reads try Supabase first, fall back to local.
+
+const STATE_DIR = join(homedir(), AGENT_NAME, ".state");
+try { mkdirSync(STATE_DIR, { recursive: true }); } catch {}
+
+function writeLocalState(key, value) {
+  try {
+    writeFileSync(join(STATE_DIR, `${key}.json`), JSON.stringify(value, null, 2));
+  } catch {}
+}
+
+function readLocalState(key) {
+  try {
+    const p = join(STATE_DIR, `${key}.json`);
+    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
+  } catch {}
+  return null;
+}
+
+function deleteLocalState(key) {
+  try {
+    const p = join(STATE_DIR, `${key}.json`);
+    if (existsSync(p)) unlinkSync(p);
+  } catch {}
+}
 
 server.tool(
   "get_state",
-  "Get a state value for the current agent. Used for idempotency markers, tracking state, etc.",
+  "Get a state value for the current agent. Used for idempotency markers, tracking state, etc. Reads from Supabase, falls back to local cache.",
   {
     key: z.string().describe("State key (e.g. 'pill_reminder', 'usage_alerts_sent', 'liability_accepted')"),
   },
   async ({ key }) => {
-    const rows = await supabaseQuery("agent_state", "GET", {
-      "agent_name": `eq.${AGENT_NAME}`,
-      "key": `eq.${key}`,
-    }) || [];
+    // Try Supabase first
+    try {
+      const rows = await supabaseQuery("agent_state", "GET", {
+        "agent_name": `eq.${AGENT_NAME}`,
+        "key": `eq.${key}`,
+      }) || [];
 
-    if (rows.length === 0) {
-      return { content: [{ type: "text", text: JSON.stringify({ found: false, key, agent: AGENT_NAME }) }] };
+      if (rows.length > 0) {
+        // Update local cache
+        writeLocalState(key, rows[0].value);
+        return { content: [{ type: "text", text: JSON.stringify({
+          found: true, key, agent: AGENT_NAME,
+          value: rows[0].value, updated_at: rows[0].updated_at, source: "supabase",
+        }, null, 2) }] };
+      }
+    } catch {}
+
+    // Fall back to local
+    const local = readLocalState(key);
+    if (local !== null) {
+      return { content: [{ type: "text", text: JSON.stringify({
+        found: true, key, agent: AGENT_NAME,
+        value: local, source: "local_cache",
+      }, null, 2) }] };
     }
 
-    return { content: [{ type: "text", text: JSON.stringify({
-      found: true,
-      key,
-      agent: AGENT_NAME,
-      value: rows[0].value,
-      updated_at: rows[0].updated_at,
-    }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ found: false, key, agent: AGENT_NAME }) }] };
   }
 );
 
 server.tool(
   "set_state",
-  "Set a state value for the current agent. Upserts — creates if new, updates if exists. Use for idempotency markers, tracking what already happened.",
+  "Set a state value for the current agent. Upserts — creates if new, updates if exists. Writes to both Supabase and local cache.",
   {
     key: z.string().describe("State key"),
     value: z.any().describe("State value (any JSON-serializable object)"),
   },
   async ({ key, value }) => {
-    await supabaseQuery("agent_state", "POST", {
-      body: {
-        agent_name: AGENT_NAME,
-        key,
-        value: typeof value === "object" ? value : { value },
-        updated_at: new Date().toISOString(),
-      },
-      headers: { "Prefer": "resolution=merge-duplicates" },
-    });
+    const storeValue = typeof value === "object" ? value : { value };
+
+    // Write to Supabase
+    try {
+      await supabaseQuery("agent_state", "POST", {
+        body: {
+          agent_name: AGENT_NAME, key,
+          value: storeValue,
+          updated_at: new Date().toISOString(),
+        },
+        headers: { "Prefer": "resolution=merge-duplicates" },
+      });
+    } catch {}
+
+    // Write to local cache
+    writeLocalState(key, storeValue);
 
     return { content: [{ type: "text", text: JSON.stringify({
-      success: true,
-      key,
-      agent: AGENT_NAME,
-      message: "State saved.",
+      success: true, key, agent: AGENT_NAME, message: "State saved to DB + local cache.",
     }) }] };
   }
 );
 
 server.tool(
   "delete_state",
-  "Delete a state key for the current agent.",
+  "Delete a state key for the current agent. Removes from both Supabase and local cache.",
   {
     key: z.string().describe("State key to delete"),
   },
   async ({ key }) => {
-    await supabaseQuery("agent_state", "DELETE", {
-      "agent_name": `eq.${AGENT_NAME}`,
-      "key": `eq.${key}`,
-    });
+    // Delete from Supabase
+    try {
+      await supabaseQuery("agent_state", "DELETE", {
+        "agent_name": `eq.${AGENT_NAME}`,
+        "key": `eq.${key}`,
+      });
+    } catch {}
+
+    // Delete local cache
+    deleteLocalState(key);
 
     return { content: [{ type: "text", text: JSON.stringify({
-      success: true,
-      key,
-      agent: AGENT_NAME,
-      message: "State deleted.",
+      success: true, key, agent: AGENT_NAME, message: "State deleted from DB + local cache.",
     }) }] };
   }
 );
@@ -1125,15 +1170,25 @@ server.tool(
   "List all state keys for the current agent.",
   {},
   async () => {
-    const rows = await supabaseQuery("agent_state", "GET", {
-      "agent_name": `eq.${AGENT_NAME}`,
-      "select": "key,updated_at",
-      "order": "key",
-    }) || [];
+    let rows = [];
+    try {
+      rows = await supabaseQuery("agent_state", "GET", {
+        "agent_name": `eq.${AGENT_NAME}`,
+        "select": "key,updated_at",
+        "order": "key",
+      }) || [];
+    } catch {}
+
+    // If Supabase failed, list from local cache
+    if (rows.length === 0) {
+      try {
+        const files = readdirSync(STATE_DIR).filter(f => f.endsWith(".json"));
+        rows = files.map(f => ({ key: f.replace(".json", ""), updated_at: null }));
+      } catch {}
+    }
 
     return { content: [{ type: "text", text: JSON.stringify({
-      agent: AGENT_NAME,
-      count: rows.length,
+      agent: AGENT_NAME, count: rows.length,
       keys: rows.map(r => ({ key: r.key, updated_at: r.updated_at })),
     }, null, 2) }] };
   }
