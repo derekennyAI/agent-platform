@@ -1,0 +1,10 @@
+{
+  "agents": {
+    "{{AGENT_NAME}}": {
+      "workspace": "~/{{AGENT_NAME}}",
+      "persona": "{{AGENT_DISPLAY_NAME}}",
+      "human": "{{AGENT_DISPLAY_NAME}}",
+      "admin": true
+    }
+  }
+}
