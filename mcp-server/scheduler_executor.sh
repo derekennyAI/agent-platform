@@ -9,6 +9,28 @@ COMPONENT_LOG="$SCRIPT_DIR/scheduler.log"
 TMUX_BIN="/opt/homebrew/bin/tmux"
 COMP="scheduler"
 
+# Load Supabase credentials from launchd plist if not already in environment
+# (crontab jobs don't inherit launchd env vars)
+if [ -z "$SUPABASE_SERVICE_KEY" ]; then
+    _PLIST="$HOME/Library/LaunchAgents/com.claude-code.daemon.plist"
+    if [ -f "$_PLIST" ]; then
+        _ENV_EXPORTS=$(python3 << PYEOF
+import plistlib, shlex
+with open("$_PLIST", "rb") as f:
+    env = plistlib.load(f).get("EnvironmentVariables", {})
+for k in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY"):
+    if k in env:
+        print(f"export {k}={shlex.quote(env[k])}")
+PYEOF
+)
+        eval "$_ENV_EXPORTS"
+    fi
+fi
+
+# Supabase config
+SUPABASE_URL="${SUPABASE_URL:-}"
+SUPABASE_KEY="${SUPABASE_SERVICE_KEY:-}"
+
 # Source infra logging library
 source "$SCRIPT_DIR/infra_lib.sh"
 
@@ -27,8 +49,21 @@ get_session() {
     esac
 }
 
-# Exit if no tasks file
-if [ ! -f "$TASKS_FILE" ]; then
+# Try to fetch tasks from Supabase; fall back to local JSON cache
+TASKS_SOURCE="supabase"
+if [ -n "$SUPABASE_KEY" ]; then
+    SUPABASE_TASKS=$(curl -sf "${SUPABASE_URL}/rest/v1/harness_scheduled_tasks?active=eq.true&select=id,agent_name,schedule,task_description,recurring,active,last_fired_at" \
+        -H "apikey: $SUPABASE_KEY" \
+        -H "Authorization: Bearer $SUPABASE_KEY" 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$SUPABASE_TASKS" ]; then
+        TASKS_SOURCE="local"
+        infra_warn "$COMP" "Supabase fetch failed, falling back to local cache"
+    fi
+else
+    TASKS_SOURCE="local"
+fi
+
+if [ "$TASKS_SOURCE" = "local" ] && [ ! -f "$TASKS_FILE" ]; then
     exit 0
 fi
 
@@ -109,7 +144,31 @@ cron_matches() {
 FIRED=0
 ERRORS=0
 
-TASK_OUTPUT=$(python3 -c "
+if [ "$TASKS_SOURCE" = "supabase" ]; then
+    # Write Supabase response to temp file to avoid quoting issues
+    TMPFILE=$(mktemp /tmp/sched_tasks.XXXXXX)
+    echo "$SUPABASE_TASKS" > "$TMPFILE"
+    TASK_OUTPUT=$(python3 -c "
+import json, sys
+
+with open('$TMPFILE') as f:
+    tasks = json.load(f)
+
+for i, task in enumerate(tasks):
+    if not task.get('active', True):
+        continue
+    print(f\"{i}|{task['id']}|{task['agent_name']}|{task['schedule']}|{task.get('recurring', True)}|{task['task_description']}\")
+" 2>&1)
+    rm -f "$TMPFILE"
+    # Also update local cache from Supabase for offline fallback
+    echo "$SUPABASE_TASKS" | python3 -c "
+import json, sys
+tasks = json.load(sys.stdin)
+with open('$TASKS_FILE', 'w') as f:
+    json.dump(tasks, f, indent=2)
+" 2>/dev/null
+else
+    TASK_OUTPUT=$(python3 -c "
 import json, sys
 
 with open('$TASKS_FILE') as f:
@@ -120,10 +179,11 @@ for i, task in enumerate(tasks):
         continue
     print(f\"{i}|{task['id']}|{task['agent_name']}|{task['schedule']}|{task.get('recurring', True)}|{task['task_description']}\")
 " 2>&1)
+fi
 
 PARSE_EXIT=$?
 if [ $PARSE_EXIT -ne 0 ]; then
-    infra_error "$COMP" "Failed to parse scheduled_tasks.json: $TASK_OUTPUT"
+    infra_error "$COMP" "Failed to parse tasks ($TASKS_SOURCE): $TASK_OUTPUT"
     exit 1
 fi
 
@@ -151,41 +211,46 @@ echo "$TASK_OUTPUT" | while IFS='|' read -r idx tid agent schedule recurring des
             continue
         fi
 
-        # Update last_fired_at in local JSON and Supabase
+        # Update last_fired_at — Supabase is source of truth, local JSON is cache
         python3 -c "
-import json, urllib.request, urllib.error
+import json, urllib.request, urllib.error, os
 from datetime import datetime, timezone
 
 now = datetime.now(timezone.utc).isoformat()
+tid = '$tid'
+recurring = '$recurring'
+deactivate = recurring.lower() == 'false'
 
-# Update local JSON
-with open('$TASKS_FILE') as f:
-    tasks = json.load(f)
+svc_key = os.environ.get('SUPABASE_SERVICE_KEY', '')
+base_url = os.environ.get('SUPABASE_URL', 'https://mfrzhijvfbwumutajqeh.supabase.co')
 
-deactivate = False
-for task in tasks:
-    if task['id'] == '$tid':
-        task['last_fired_at'] = now
-        if not task.get('recurring', True):
-            task['active'] = False
-            deactivate = True
-        break
+# Primary: Update Supabase
+if svc_key:
+    try:
+        url = f'{base_url}/rest/v1/harness_scheduled_tasks?id=eq.{tid}'
+        body = json.dumps({'last_fired_at': now} | ({'active': False} if deactivate else {})).encode()
+        req = urllib.request.Request(url, data=body, method='PATCH', headers={
+            'apikey': svc_key, 'Authorization': f'Bearer {svc_key}',
+            'Content-Type': 'application/json', 'Prefer': 'return=minimal'
+        })
+        urllib.request.urlopen(req)
+    except Exception:
+        pass
 
-with open('$TASKS_FILE', 'w') as f:
-    json.dump(tasks, f, indent=2)
-
-# Sync to Supabase
+# Cache: Update local JSON
 try:
-    svc_key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mcnpoaWp2ZmJ3dW11dGFqcWVoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjgzNDMyNywiZXhwIjoyMDg4NDEwMzI3fQ.W6AmTsNcMNo4LHZcjKCOVgzWPasciEtM9KhLAkeKDKE'
-    url = '${SUPABASE_URL}/rest/v1/harness_scheduled_tasks?id=eq.$tid'
-    body = json.dumps({'last_fired_at': now} | ({'active': False} if deactivate else {})).encode()
-    req = urllib.request.Request(url, data=body, method='PATCH', headers={
-        'apikey': svc_key, 'Authorization': f'Bearer {svc_key}',
-        'Content-Type': 'application/json', 'Prefer': 'return=minimal'
-    })
-    urllib.request.urlopen(req)
+    with open('$TASKS_FILE') as f:
+        tasks = json.load(f)
+    for task in tasks:
+        if task['id'] == tid:
+            task['last_fired_at'] = now
+            if deactivate:
+                task['active'] = False
+            break
+    with open('$TASKS_FILE', 'w') as f:
+        json.dump(tasks, f, indent=2)
 except Exception:
-    pass  # Non-fatal — local JSON is the executor's source of truth
+    pass
 " 2>/dev/null
     fi
 done
