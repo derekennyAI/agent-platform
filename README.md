@@ -139,11 +139,17 @@ Agents interact with the platform through these MCP tools:
 - `store_credential` — Save a credential (scoped to agent)
 - `get_credential` — Retrieve a credential
 - `list_credentials` — List stored credentials
-- `delete_credential` — Remove a credential
+- `revoke_credential` — Remove a credential
+
+### Services
+- `connect_service` — OAuth flow for Gmail, Microsoft, etc.
+- `disconnect_service` — Remove a connected service
 
 ### Skills
-- `my_skills` — List skills granted to this agent
+- `my_skills` — List skills granted to this agent (user-friendly descriptions)
+- `list_skills` — List skills with internal details
 - `list_skill_catalog` — Browse all available skills
+- `run_skill` — Execute a skill script
 - `grant_skill` / `revoke_skill` — Manage permissions
 
 ### Scheduling
@@ -158,10 +164,19 @@ Agents interact with the platform through these MCP tools:
 - `delete_state` — Remove a state key
 - `list_state` — List all state keys
 
-### Admin
-- `list_admin_tasks` — Check for tasks assigned by other agents
-- `complete_admin_task` — Mark a task as done
-- `submit_admin_task` — Assign a task to another agent
+### Admin / Multi-Agent
+- `create_admin_task` — Assign a task to another agent
+- `list_pending_tasks` — Check for tasks assigned to you
+- `verify_task` — Verify a task is legitimate
+- `complete_task` — Mark a task as done
+
+### Observability
+- `log_interaction` — Log conversation metadata
+- `log_infra_event` — Log infrastructure events
+- `start_session` / `end_session` — Track session lifecycle
+- `get_agent_info` — Get info about an agent
+- `list_agents` — List all registered agents
+- `update_agent_status` — Update agent status (active, idle, blocked, etc.)
 
 ## How Scheduling Works
 
