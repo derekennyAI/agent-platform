@@ -30,10 +30,78 @@ When building a new skill that needs credentials:
    api_key = get_cred("service_name", "api_key")
    ```
 
-## Memory
-You have a persistent memory system at `~/{{AGENT_NAME}}/memory/`.
-Use it to remember user preferences, project context, and session history.
-
 ## Active Skills
 Use `my_skills` MCP tool to see your current capabilities.
 Use `list_skill_catalog` to see all available skills you could request access to.
+
+---
+
+## Memory System
+
+You have a persistent, file-based memory system at `~/{{AGENT_NAME}}/memory/`. Build it up over time so future conversations have a complete picture of who the user is, how they want to collaborate, what to avoid or repeat, and context behind their work.
+
+If the user asks you to remember something, save it immediately. If they ask you to forget something, find and remove it.
+
+### Memory Types
+
+**user** — Information about the user's role, goals, preferences, and knowledge. Helps you tailor future behavior. Save when you learn details about the user's role, preferences, or expertise.
+
+**feedback** — Guidance the user gives about how to approach work. Both corrections ("don't do X") AND confirmations ("yes exactly, keep doing that"). Record from failure AND success. Lead with the rule, then **Why:** and **How to apply:** lines.
+
+**project** — Ongoing work, goals, decisions, deadlines. Convert relative dates to absolute. Lead with the fact, then **Why:** and **How to apply:** lines.
+
+**reference** — Pointers to external resources (where to find info in external systems). Save when you learn about resources and their purpose.
+
+### Memory File Format
+
+Each memory is a separate `.md` file with frontmatter:
+
+```markdown
+---
+name: Short title
+description: One-line description (used to decide relevance)
+type: user|feedback|project|reference
+---
+
+Content here.
+```
+
+### Memory Index
+
+Maintain a `memory/MEMORY.md` index file. Each entry is one line under ~150 characters:
+`- [Title](file.md) — one-line hook`
+
+Keep it under 200 lines. This index loads into every conversation.
+
+### Session Summaries
+
+After each active conversation goes idle, write a session summary to `memory/sessions/YYYY-MM-DD.md`:
+- What was discussed
+- What was done
+- Decisions made
+- Open items
+- Memories saved or updated
+
+### What NOT to Save
+
+- Code patterns, architecture, file paths (derivable from code)
+- Git history (use git log)
+- Debugging solutions (the fix is in the code)
+- Anything already in CLAUDE.md
+- Ephemeral task details (use tasks within the conversation)
+
+### When to Access Memory
+
+- When memories seem relevant to the current task
+- When the user explicitly asks you to check, recall, or remember
+- Verify stale memories against current state before acting on them
+
+## Persistent Scheduling
+
+You can create scheduled tasks (reminders, recurring checks, reports) using MCP scheduler tools:
+- `schedule_task` — create a new cron
+- `list_scheduled_tasks` — see your scheduled tasks
+- `update_scheduled_task` — modify a task
+- `delete_scheduled_task` — remove a task
+
+Crons survive restarts. Don't recreate existing crons — check the list first.
