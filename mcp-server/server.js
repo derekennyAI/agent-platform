@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const SUPABASE_URL = "https://your-project.supabase.co";
+const SUPABASE_URL = process.env.SUPABASE_URL || "https://your-project.supabase.co";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const AGENT_NAME = process.env.AGENT_NAME || "unknown";
 

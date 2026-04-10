@@ -98,6 +98,50 @@ CREATE TABLE IF NOT EXISTS infra_events (
   metadata JSONB DEFAULT '{}'::jsonb
 );
 
+-- 8. AGENT_CREDENTIALS — vault for scoped secrets
+CREATE TABLE IF NOT EXISTS agent_credentials (
+  id SERIAL PRIMARY KEY,
+  agent_name TEXT NOT NULL,
+  service TEXT NOT NULL,
+  credential_key TEXT NOT NULL,
+  credential_value TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(agent_name, service, credential_key)
+);
+
+-- 9. AGENT_STATE — idempotency markers and state tracking (Phase 3)
+CREATE TABLE IF NOT EXISTS agent_state (
+  id SERIAL PRIMARY KEY,
+  agent_name TEXT NOT NULL,
+  key TEXT NOT NULL,
+  value JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(agent_name, key)
+);
+
+-- 10. AGENT_ANALYTICS — usage and event logs (Phase 4)
+CREATE TABLE IF NOT EXISTS agent_analytics (
+  id SERIAL PRIMARY KEY,
+  agent_name TEXT NOT NULL,
+  event TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 11. ADMIN_TASKS — inter-agent task queue
+CREATE TABLE IF NOT EXISTS admin_tasks (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  agent_name TEXT NOT NULL,
+  created_by TEXT NOT NULL,
+  task_description TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'failed')),
+  result TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_agent ON scheduled_tasks(agent_name);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_active ON scheduled_tasks(active) WHERE active = true;
@@ -108,3 +152,8 @@ CREATE INDEX IF NOT EXISTS idx_interaction_logs_ts ON interaction_logs(timestamp
 CREATE INDEX IF NOT EXISTS idx_infra_events_level ON infra_events(level);
 CREATE INDEX IF NOT EXISTS idx_infra_events_component ON infra_events(component);
 CREATE INDEX IF NOT EXISTS idx_infra_events_ts ON infra_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_agent_credentials_lookup ON agent_credentials(agent_name, service);
+CREATE INDEX IF NOT EXISTS idx_agent_state_agent ON agent_state(agent_name);
+CREATE INDEX IF NOT EXISTS idx_agent_analytics_agent ON agent_analytics(agent_name);
+CREATE INDEX IF NOT EXISTS idx_agent_analytics_ts ON agent_analytics(created_at);
+CREATE INDEX IF NOT EXISTS idx_admin_tasks_agent ON admin_tasks(agent_name, status);
