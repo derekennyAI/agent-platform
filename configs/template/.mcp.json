@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "admin-control": {
+      "command": "node",
+      "args": ["{{PLATFORM_DIR}}/mcp-server/server.js"],
+      "env": {
+        "AGENT_NAME": "{{AGENT_NAME}}",
+        "SUPABASE_URL": "{{SUPABASE_URL}}",
+        "SUPABASE_SERVICE_KEY": "{{SUPABASE_SERVICE_KEY}}"
+      }
+    }
+  }
+}

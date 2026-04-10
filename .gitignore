@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+*.pem
+*.key
+
+# Credentials (OAuth tokens, secrets — never commit)
+.config/
+
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+analytics.jsonl
+usage_stats.json
+
+# Logs
+*.log
+logs/
+
+# Build artifacts and caches
+__pycache__/
+*.pyc
+node_modules/
+.cache/
+.npm/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Generated output
+reports/*.html
+*.tmp
+*.bak
