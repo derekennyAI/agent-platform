@@ -1,0 +1,23 @@
+{
+  "model": "claude-opus-4-6",
+  "effortLevel": "high",
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "enableAllProjectMcpServers": true,
+  "channelsEnabled": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|mcp__plugin_imessage_imessage__reply",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 {{PLATFORM_DIR}}/hooks/approval-gate.py"
+          }
+        ]
+      }
+    ]
+  }
+}

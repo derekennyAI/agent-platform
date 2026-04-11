@@ -15,6 +15,8 @@ A complete platform for running persistent AI agents powered by Claude Code. Eac
 - **Multi-agent coordination** — admin tasks queue, inter-agent communication
 - **Memory system** — persistent file-based memory that builds over time
 - **Security** — post-build skill validation, workspace isolation, credential scoping
+- **Agent monitoring** — health dashboard, auto-restart on crash, error logging to Supabase
+- **Two-tier approval gate** — PreToolUse hooks route admin-level changes to you, operational approvals to each agent's user
 
 ## Prerequisites
 
@@ -223,6 +225,40 @@ Create additional agents with `create_agent.py`. Each gets:
 
 One agent can be designated as "admin" with supervisory access. See `docs/multi-agent.md`.
 
+## Agent Monitoring
+
+The platform includes real-time health monitoring for all agents:
+
+- **`scripts/agent_health_check.py`** — checks all agent tmux sessions, detects errors, logs to Supabase `infra_events`
+- **Auto-restart**: downed agents are automatically restarted via launchctl
+- **Escalation**: alerts the admin after 2 consecutive down checks
+- **Dashboard**: generates an HTML health dashboard at `reports/agent-health.html`
+- **Recommended cron**: every 5 minutes (`*/5 * * * *`)
+
+Run `python3 scripts/agent_health_check.py --dashboard` to check all agents and regenerate the dashboard.
+
+## Approval Gate
+
+A two-tier PreToolUse hook (`hooks/approval-gate.py`) that routes approval requests via Telegram:
+
+**Admin tier** (shared infrastructure):
+- Modifying MCP server code, scheduler, or infra scripts
+- Cross-workspace file access
+- Git push to platform repos
+- Supabase schema changes (CREATE/ALTER/DROP TABLE)
+
+**User tier** (operational actions):
+- Sending emails or messages
+- External API calls
+- Falls back to admin if the agent's user isn't configured
+
+**No gate** (just happens):
+- Agent editing its own workspace, CLAUDE.md, scheduled tasks, credentials
+- Normal file reads, searches, and tool use
+- Telegram replies
+
+Configure in `~/.claude/settings.json` (see `configs/template/settings.json`). Set `AGENT_NAME` and `APPROVAL_GATE_ADMIN_CHAT` in each agent's plist.
+
 ## Security
 
 - **Credential scoping**: Each agent can only read its own credentials
@@ -230,7 +266,7 @@ One agent can be designated as "admin" with supervisory access. See `docs/multi-
 - **Post-build validation**: `skill_validator.py` scans for hardcoded secrets, cross-workspace access
 - **Workspace isolation**: Behavioral rules in CLAUDE.md + MCP scoping
 - **Security monitoring**: `security_watch.py` runs hourly via crontab
-- **Double-confirm destructive actions**: Agents require two confirmations before deleting anything
+- **Approval gate**: Two-tier hook prevents unauthorized infra changes (see above)
 
 ## Documentation
 
