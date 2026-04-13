@@ -28,7 +28,7 @@ PYEOF
 fi
 
 # Supabase config
-SUPABASE_URL="${SUPABASE_URL:-}"
+SUPABASE_URL="${SUPABASE_URL:-${SUPABASE_URL}}"
 SUPABASE_KEY="${SUPABASE_SERVICE_KEY:-}"
 
 # Source infra logging library
@@ -65,6 +65,106 @@ fi
 
 if [ "$TASKS_SOURCE" = "local" ] && [ ! -f "$TASKS_FILE" ]; then
     exit 0
+fi
+
+# ==========================================
+# TWO-WAY SYNC — reconcile Supabase ↔ local
+# ==========================================
+# Runs every 10 minutes. Three cases:
+#   1. Local only → push to Supabase
+#   2. Supabase only → pull to local (handled by cache write below)
+#   3. Both exist but differ → alert admin, don't auto-resolve
+if [ "$TASKS_SOURCE" = "supabase" ] && [ -f "$TASKS_FILE" ] && [ $((NOW_MIN % 10)) -eq 0 ]; then
+    python3 << 'SYNC_EOF'
+import json, os, sys, urllib.request, urllib.error
+
+tasks_file = os.environ.get("TASKS_FILE", "scheduled_tasks.json")
+svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+base_url = os.environ.get("SUPABASE_URL", "")
+chat_id = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "${ADMIN_TELEGRAM_CHAT_ID:-}")
+
+if not svc_key or not base_url:
+    sys.exit(0)
+
+# Load local tasks
+try:
+    with open(tasks_file) as f:
+        local_tasks = {t["id"]: t for t in json.load(f)}
+except:
+    sys.exit(0)
+
+# Load Supabase tasks
+try:
+    url = f"{base_url}/rest/v1/harness_scheduled_tasks?select=id,agent_name,schedule,task_description,recurring,active,last_fired_at"
+    req = urllib.request.Request(url, headers={
+        "apikey": svc_key, "Authorization": f"Bearer {svc_key}"
+    })
+    resp = urllib.request.urlopen(req)
+    db_tasks = {t["id"]: t for t in json.loads(resp.read())}
+except:
+    sys.exit(0)
+
+alerts = []
+
+# Case 1: Local only → push to Supabase
+for tid, task in local_tasks.items():
+    if tid not in db_tasks:
+        try:
+            body = json.dumps({
+                "id": tid,
+                "agent_name": task.get("agent_name", "derek"),
+                "created_by": task.get("agent_name", "derek"),
+                "schedule": task["schedule"],
+                "task_description": task["task_description"],
+                "recurring": task.get("recurring", True),
+                "active": task.get("active", True),
+            }).encode()
+            req = urllib.request.Request(
+                f"{base_url}/rest/v1/harness_scheduled_tasks",
+                data=body, method="POST",
+                headers={
+                    "apikey": svc_key, "Authorization": f"Bearer {svc_key}",
+                    "Content-Type": "application/json", "Prefer": "return=minimal"
+                }
+            )
+            urllib.request.urlopen(req)
+            print(f"SYNC: pushed local-only task {tid} to Supabase")
+        except Exception as e:
+            print(f"SYNC: failed to push {tid}: {e}", file=sys.stderr)
+
+# Case 3: Both exist but differ → alert
+COMPARE_FIELDS = ["schedule", "task_description", "active"]
+for tid in local_tasks:
+    if tid in db_tasks:
+        for field in COMPARE_FIELDS:
+            local_val = local_tasks[tid].get(field)
+            db_val = db_tasks[tid].get(field)
+            if local_val != db_val:
+                alerts.append(f"Task {tid}: '{field}' differs — local={local_val}, db={db_val}")
+
+if alerts:
+    # Send alert via Telegram
+    try:
+        bot_envfile = os.path.expanduser("~/.claude/channels/telegram/.env")
+        bot_token = ""
+        if os.path.exists(bot_envfile):
+            for line in open(bot_envfile):
+                if line.startswith("TELEGRAM_BOT_TOKEN="):
+                    bot_token = line.strip().split("=", 1)[1]
+        if bot_token and chat_id:
+            msg = "⚠️ SYNC CONFLICT — local vs Supabase:\n" + "\n".join(alerts[:5])
+            data = urllib.parse.urlencode({"chat_id": chat_id, "text": msg}).encode()
+            import urllib.parse
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                data=data, method="POST"
+            )
+            urllib.request.urlopen(req)
+    except:
+        pass
+    print(f"SYNC: {len(alerts)} conflict(s) flagged to admin")
+SYNC_EOF
+    export TASKS_FILE SUPABASE_URL SUPABASE_SERVICE_KEY
 fi
 
 # Get current time components (local timezone)
@@ -222,7 +322,7 @@ recurring = '$recurring'
 deactivate = recurring.lower() == 'false'
 
 svc_key = os.environ.get('SUPABASE_SERVICE_KEY', '')
-base_url = os.environ.get('SUPABASE_URL', 'https://mfrzhijvfbwumutajqeh.supabase.co')
+base_url = os.environ.get('SUPABASE_URL', '${SUPABASE_URL}')
 
 # Primary: Update Supabase
 if svc_key:
@@ -254,3 +354,67 @@ except Exception:
 " 2>/dev/null
     fi
 done
+
+# ==========================================
+# HEARTBEAT EXECUTOR — runs every 10 minutes
+# ==========================================
+# Checks for agents with active heartbeats and fires a single
+# "check your heartbeats" message per agent per cycle.
+# The agent then calls list_heartbeats and processes each watch.
+
+if [ $((NOW_MIN % 10)) -eq 0 ] && [ -n "$SUPABASE_KEY" ]; then
+    # Fetch agents that have active heartbeats (distinct agent names)
+    HB_AGENTS=$(curl -sf "${SUPABASE_URL}/rest/v1/heartbeats?active=eq.true&select=agent_name,id,description" \
+        -H "apikey: $SUPABASE_KEY" \
+        -H "Authorization: Bearer $SUPABASE_KEY" 2>/dev/null)
+
+    if [ -n "$HB_AGENTS" ] && [ "$HB_AGENTS" != "[]" ]; then
+        # Group heartbeats by agent and fire one message per agent
+        python3 -c "
+import json, sys
+
+heartbeats = json.loads('''$HB_AGENTS''')
+if not heartbeats:
+    sys.exit(0)
+
+# Group by agent
+agents = {}
+for hb in heartbeats:
+    agent = hb['agent_name']
+    if agent not in agents:
+        agents[agent] = []
+    agents[agent].append(hb)
+
+# Output: agent|count|summary
+for agent, hbs in agents.items():
+    count = len(hbs)
+    summary = '; '.join(h['description'][:60] for h in hbs[:5])
+    print(f'{agent}|{count}|{summary}')
+" 2>/dev/null | while IFS='|' read -r hb_agent hb_count hb_summary; do
+            [ -z "$hb_agent" ] && continue
+
+            session="$(get_session "$hb_agent")"
+            if [ -z "$session" ]; then
+                continue
+            fi
+
+            if ! $TMUX_BIN has-session -t "$session" 2>/dev/null; then
+                continue
+            fi
+
+            # Fire single heartbeat check message
+            $TMUX_BIN send-keys -t "$session" "HEARTBEAT: You have $hb_count active watch(es). Call list_heartbeats to get the full list, then check each one using your available tools. Only notify the user if something matches. Watches: $hb_summary" Enter 2>/dev/null
+            if [ $? -eq 0 ]; then
+                infra_info "$COMP" "HEARTBEAT fired for $hb_agent ($hb_count watches)"
+            fi
+
+            # Update last_checked_at for all this agent's heartbeats
+            curl -sf -X PATCH "${SUPABASE_URL}/rest/v1/heartbeats?agent_name=eq.${hb_agent}&active=eq.true" \
+                -H "apikey: $SUPABASE_KEY" \
+                -H "Authorization: Bearer $SUPABASE_KEY" \
+                -H "Content-Type: application/json" \
+                -H "Prefer: return=minimal" \
+                -d "{\"last_checked_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" 2>/dev/null
+        done
+    fi
+fi
