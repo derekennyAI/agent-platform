@@ -5,12 +5,12 @@ Reads credentials from MCP vault (scoped to AGENT_NAME) with local disk fallback
 Each agent sends from their own Gmail account.
 
 Usage:
-    python3 send_email.py --to "farlen@enny.ai" --subject "Daily Idea Digest" --body "markdown or plain text here"
-    python3 send_email.py --to "farlen@enny.ai" --subject "Test" --body-file /tmp/digest.md
-    echo "email body" | python3 send_email.py --to "farlen@enny.ai" --subject "Test" --stdin
+    python3 send_email.py --to "user@example.com" --subject "Daily Idea Digest" --body "markdown or plain text here"
+    python3 send_email.py --to "user@example.com" --subject "Test" --body-file /tmp/digest.md
+    echo "email body" | python3 send_email.py --to "user@example.com" --subject "Test" --stdin
 
 Environment:
-    AGENT_NAME — which agent's credentials to use (default: "derek")
+    AGENT_NAME — which agent's credentials to use (default: "agent")
     SUPABASE_SERVICE_KEY — required for vault access
 """
 
@@ -79,7 +79,7 @@ def _detect_from_email():
             return cred["metadata"]["email"]
     except Exception:
         pass
-    return f"{_AGENT_NAME}@enny.ai"  # last resort
+    return f"{_AGENT_NAME}@example.com"  # last resort — update with your domain
 
 FROM_EMAIL = _detect_from_email()
 

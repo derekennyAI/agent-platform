@@ -14,10 +14,11 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-WORKSPACE = Path.home() / "derek"
-SESSIONS_FILE = Path.home() / ".openclaw" / "agents" / "main" / "sessions" / "sessions.json"
-LOG_FILE = Path("/tmp/openclaw") / f"openclaw-{datetime.now().strftime('%Y-%m-%d')}.log"
-EXPECTED_TELEGRAM_USER = "8676483103"
+AGENT_NAME = os.environ.get("AGENT_NAME", "agent")
+WORKSPACE = Path.home() / AGENT_NAME
+SESSIONS_FILE = Path.home() / ".claude" / "sessions" / "sessions.json"
+LOG_FILE = Path.home() / "logs" / f"agent-{datetime.now().strftime('%Y-%m-%d')}.log"
+EXPECTED_TELEGRAM_USER = os.environ.get("EXPECTED_TELEGRAM_USER", "")
 CANARY = "SECURITY-CANARY:7f3a9b2e-4c1d-8f6a-b5e7-2d3c9a1f4e8b"
 CRITICAL_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"]
 

@@ -15,7 +15,7 @@ Complete walkthrough for setting up the Agent Platform from scratch.
 ## Step 1: Clone and Run Setup
 
 ```bash
-git clone https://github.com/derekennyAI/agent-platform.git
+git clone https://github.com/ennyai/agent-platform.git
 cd agent-platform
 ./setup.sh
 ```

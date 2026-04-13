@@ -51,10 +51,10 @@ def _build_account_dirs():
         for d in _ACCOUNTS_DIR.iterdir():
             if d.is_dir() and (d / "google-token.json").exists():
                 # Convert dir name back to a short alias
-                name = d.name  # e.g. "derek_at_enny_ai"
+                name = d.name  # e.g. "user_at_example_com"
                 # Create short aliases from the directory name
                 email = name.replace("_at_", "@").replace("_", ".")
-                short = email.split("@")[0]  # e.g. "derek", "fmischel"
+                short = email.split("@")[0]  # e.g. "user", "admin"
                 dirs[short] = d
                 dirs[name] = d  # also allow full dir name
     return dirs

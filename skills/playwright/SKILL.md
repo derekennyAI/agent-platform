@@ -77,9 +77,9 @@ Use standard CSS selectors or text-based locators:
 ```json
 [
   { "action": "navigate", "url": "https://site.com/contact" },
-  { "action": "fill", "selector": "#name", "value": "Derek" },
-  { "action": "fill", "selector": "#email", "value": "derek@enny.ai" },
-  { "action": "fill", "selector": "#message", "value": "Hello from Derek!" },
+  { "action": "fill", "selector": "#name", "value": "Agent" },
+  { "action": "fill", "selector": "#email", "value": "agent@example.com" },
+  { "action": "fill", "selector": "#message", "value": "Hello from Agent!" },
   { "action": "screenshot", "path": "before-submit.png" },
   { "action": "click", "selector": "button[type=submit]" },
   { "action": "wait", "ms": 2000 },

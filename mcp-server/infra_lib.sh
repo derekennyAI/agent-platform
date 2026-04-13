@@ -11,25 +11,25 @@
 #   infra_critical COMPONENT "message"  — log CRITICAL + Telegram alert
 #
 # All entries go to:
-#   1. Central log: ~/derek/logs/infra.log (all systems)
+#   1. Central log: ~/logs/infra.log (all systems)
 #   2. Component log: $COMPONENT_LOG (set before sourcing)
 #
 # Trace IDs: Auto-generated per invocation. Override by setting TRACE_ID before sourcing.
 
 INFRA_LOG_DIR="$HOME/logs"
 INFRA_LOG="$INFRA_LOG_DIR/infra.log"
-INFRA_CHAT_ID="8676483103"
+INFRA_CHAT_ID="${ADMIN_TELEGRAM_CHAT_ID:-}"
 
 # Generate trace ID: epoch-PID
 : "${TRACE_ID:=$(date +%s)-$$}"
 
 mkdir -p "$INFRA_LOG_DIR"
 
-# Lazy-load Derek's bot token for alerts
+# Lazy-load admin bot token for alerts
 _INFRA_BOT_TOKEN=""
 _infra_bot_token() {
     if [ -z "$_INFRA_BOT_TOKEN" ]; then
-        # Read from Derek's Telegram channel .env file
+        # Read from admin agent's Telegram channel .env file
         local envfile="$HOME/.claude/channels/telegram/.env"
         if [ -f "$envfile" ]; then
             _INFRA_BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$envfile" | cut -d= -f2-)

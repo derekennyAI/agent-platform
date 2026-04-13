@@ -31,7 +31,7 @@ A complete platform for running persistent AI agents powered by Claude Code. Eac
 ## Quick Start
 
 ```bash
-git clone https://github.com/derekennyAI/agent-platform.git
+git clone https://github.com/ennyai/agent-platform.git
 cd agent-platform
 ./setup.sh
 ```
