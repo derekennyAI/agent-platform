@@ -6,7 +6,7 @@
  * 1. Admin Verification — agents verify if admin-issued tasks are legitimate
  * 2. Credential Vault — agents store/retrieve scoped credentials
  *
- * Backed by Supabase (your-project).
+ * Backed by Supabase (mfrzhijvfbwumutajqeh).
  * Each agent identifies itself via AGENT_NAME env var.
  */
 
@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://your-project.supabase.co";
+const SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const AGENT_NAME = process.env.AGENT_NAME || "unknown";
 
@@ -1397,6 +1397,198 @@ server.tool(
 
     return {
       content: [{ type: "text", text: JSON.stringify({ success: true, agent, status, message: "Agent status updated." }, null, 2) }]
+    };
+  }
+);
+
+// ==========================================
+// MODULE 7: Heartbeat (Always-On Watches)
+// ==========================================
+// Heartbeats are persistent "watches" — things the agent monitors for on a cycle.
+// Unlike scheduled tasks (which DO things on a schedule), heartbeats WATCH for
+// signals and only act when something matches.
+// Backed by Supabase `heartbeats` table. Executor fires a single "check your
+// heartbeats" message per agent per cycle (every 10 min).
+
+function generateHeartbeatId() {
+  return `hb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+server.tool(
+  "add_heartbeat",
+  "Add a heartbeat — a persistent watch that checks for something on a regular cycle. Unlike scheduled tasks which DO things, heartbeats WATCH for signals (new email, lead, review, threshold, etc.) and alert only when triggered. Runs every 10 minutes automatically.",
+  {
+    watch_type: z.string().describe("Type of watch: email, lead, review, inventory, uptime, webhook, custom"),
+    description: z.string().describe("Human-readable description of what to watch for (e.g. 'New lead from enny.ai contact form')"),
+    check_config: z.string().optional().describe("JSON config for the check — depends on watch_type. Email: {from, subject_contains, to}. Lead: {source}. Custom: {instructions}. Omit for simple watches."),
+    notify_method: z.string().optional().describe("How to notify: telegram (default), email"),
+    agent: z.string().optional().describe("Target agent (admin only — omit for yourself)"),
+  },
+  async ({ watch_type, description, check_config, notify_method, agent }) => {
+    const ADMIN_AGENTS = ["derek", "dereklm"];
+    const targetAgent = agent && ADMIN_AGENTS.includes(AGENT_NAME) ? agent : AGENT_NAME;
+
+    if (agent && !ADMIN_AGENTS.includes(AGENT_NAME)) {
+      return { content: [{ type: "text", text: `Denied: only admin agents can add heartbeats for other agents.` }] };
+    }
+
+    let parsedConfig = {};
+    if (check_config) {
+      try {
+        parsedConfig = JSON.parse(check_config);
+      } catch {
+        return { content: [{ type: "text", text: `Invalid check_config: must be valid JSON.` }] };
+      }
+    }
+
+    const hbId = generateHeartbeatId();
+    const hbData = {
+      id: hbId,
+      agent_name: targetAgent,
+      watch_type,
+      description,
+      check_config: parsedConfig,
+      notify_method: notify_method || "telegram",
+      active: true,
+      created_by: AGENT_NAME,
+      created_at: new Date().toISOString(),
+    };
+
+    await supabaseQuery("heartbeats", "POST", { body: hbData });
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({
+        success: true,
+        id: hbId,
+        agent: targetAgent,
+        watch_type,
+        description,
+        notify_method: notify_method || "telegram",
+        message: `Heartbeat added. I'll check for this every ~10 minutes and alert when triggered. Use delete_heartbeat('${hbId}') to remove.`
+      }, null, 2) }]
+    };
+  }
+);
+
+server.tool(
+  "list_heartbeats",
+  "List all heartbeats (active watches). Agents see their own. Admins can query any agent or all.",
+  {
+    agent: z.string().optional().describe("Filter by agent (admin only). Use '*' for all agents."),
+    active_only: z.boolean().optional().describe("Only show active heartbeats (default true)"),
+  },
+  async ({ agent, active_only }) => {
+    const ADMIN_AGENTS = ["derek", "dereklm"];
+    const showAll = agent === "*" && ADMIN_AGENTS.includes(AGENT_NAME);
+    const targetAgent = showAll ? null : (agent && ADMIN_AGENTS.includes(AGENT_NAME) ? agent : AGENT_NAME);
+
+    if (agent && agent !== "*" && !ADMIN_AGENTS.includes(AGENT_NAME)) {
+      return { content: [{ type: "text", text: `Denied: only admin agents can list other agents' heartbeats.` }] };
+    }
+
+    const params = { "order": "agent_name,created_at" };
+    if (targetAgent) params["agent_name"] = `eq.${targetAgent}`;
+    if (active_only !== false) params["active"] = "eq.true";
+
+    const heartbeats = await supabaseQuery("heartbeats", "GET", params) || [];
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({
+        agent: targetAgent || "all",
+        count: heartbeats.length,
+        heartbeats: heartbeats.map(h => ({
+          id: h.id,
+          agent: h.agent_name,
+          watch_type: h.watch_type,
+          description: h.description,
+          check_config: h.check_config,
+          notify_method: h.notify_method,
+          active: h.active,
+          last_checked: h.last_checked_at,
+          last_triggered: h.last_triggered_at,
+          created_by: h.created_by,
+        }))
+      }, null, 2) }]
+    };
+  }
+);
+
+server.tool(
+  "update_heartbeat",
+  "Update a heartbeat's description, config, or watch type.",
+  {
+    heartbeat_id: z.string().describe("The heartbeat ID to update"),
+    description: z.string().optional().describe("New description"),
+    check_config: z.string().optional().describe("New JSON config"),
+    watch_type: z.string().optional().describe("New watch type"),
+    notify_method: z.string().optional().describe("New notify method"),
+  },
+  async ({ heartbeat_id, description, check_config, watch_type, notify_method }) => {
+    const ADMIN_AGENTS = ["derek", "dereklm"];
+
+    const hbs = await supabaseQuery("heartbeats", "GET", { "id": `eq.${heartbeat_id}` });
+    if (!hbs || hbs.length === 0) {
+      return { content: [{ type: "text", text: JSON.stringify({ success: false, message: "Heartbeat not found." }, null, 2) }] };
+    }
+
+    if (!ADMIN_AGENTS.includes(AGENT_NAME) && hbs[0].agent_name !== AGENT_NAME) {
+      return { content: [{ type: "text", text: `Denied: you can only update your own heartbeats.` }] };
+    }
+
+    const updates = {};
+    if (description !== undefined) updates.description = description;
+    if (watch_type !== undefined) updates.watch_type = watch_type;
+    if (notify_method !== undefined) updates.notify_method = notify_method;
+    if (check_config !== undefined) {
+      try {
+        updates.check_config = JSON.parse(check_config);
+      } catch {
+        return { content: [{ type: "text", text: `Invalid check_config: must be valid JSON.` }] };
+      }
+    }
+
+    await supabaseQuery("heartbeats", "PATCH", {
+      filters: { "id": `eq.${heartbeat_id}` },
+      body: updates,
+    });
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({
+        success: true,
+        updated: { id: heartbeat_id, ...updates },
+        message: "Heartbeat updated."
+      }, null, 2) }]
+    };
+  }
+);
+
+server.tool(
+  "delete_heartbeat",
+  "Delete a heartbeat by ID.",
+  {
+    heartbeat_id: z.string().describe("The heartbeat ID to delete"),
+  },
+  async ({ heartbeat_id }) => {
+    const ADMIN_AGENTS = ["derek", "dereklm"];
+
+    const hbs = await supabaseQuery("heartbeats", "GET", { "id": `eq.${heartbeat_id}` });
+    if (!hbs || hbs.length === 0) {
+      return { content: [{ type: "text", text: JSON.stringify({ success: false, message: "Heartbeat not found." }, null, 2) }] };
+    }
+
+    if (!ADMIN_AGENTS.includes(AGENT_NAME) && hbs[0].agent_name !== AGENT_NAME) {
+      return { content: [{ type: "text", text: `Denied: you can only delete your own heartbeats.` }] };
+    }
+
+    const removed = hbs[0];
+    await supabaseQuery("heartbeats", "DELETE", { "id": `eq.${heartbeat_id}` });
+
+    return {
+      content: [{ type: "text", text: JSON.stringify({
+        success: true,
+        deleted: { id: removed.id, agent: removed.agent_name, description: removed.description },
+        message: "Heartbeat deleted."
+      }, null, 2) }]
     };
   }
 );

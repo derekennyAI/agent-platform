@@ -11,34 +11,25 @@ Usage:
 
 import subprocess, json, os, sys, time, urllib.request
 from datetime import datetime, timezone
-from pathlib import Path
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 TMUX = "/opt/homebrew/bin/tmux"
 
-PLATFORM_DIR = Path(__file__).resolve().parent.parent
-AGENTS_REGISTRY = PLATFORM_DIR / "configs" / "agents.json"
-
-def load_agents():
-    """Load agents from registry, or use defaults."""
-    if AGENTS_REGISTRY.exists():
-        with open(AGENTS_REGISTRY) as f:
-            registry = json.load(f)
-        return [
-            {"name": a["name"], "tmux": f"{a['name']}-agent", "workspace": os.path.expanduser(f"~/{a['name']}")}
-            for a in registry
-        ]
-    # Fallback: scan for agent tmux sessions
-    return []
-
-AGENTS = load_agents()
+AGENTS = [
+    {"name": "vera", "tmux": "vera-agent", "workspace": os.path.expanduser("~/vera")},
+    {"name": "nate", "tmux": "nate-agent", "workspace": os.path.expanduser("~/nate")},
+    {"name": "blake", "tmux": "blake-agent", "workspace": os.path.expanduser("~/blake")},
+    {"name": "julie", "tmux": "julie-agent", "workspace": os.path.expanduser("~/julie")},
+    {"name": "macgyver", "tmux": "macgyver-agent", "workspace": os.path.expanduser("~/macgyver")},
+    {"name": "dereklm", "tmux": "dereklm-agent", "workspace": os.path.expanduser("~/dereklm")},
+    {"name": "derek", "tmux": "claude-agent", "workspace": os.path.expanduser("~/derek")},
+]
 
 # Intervention rules
 MAX_CONSECUTIVE_DOWN = 2  # alert after 2 consecutive down checks
-ADMIN_AGENT = os.environ.get("AGENT_NAME", "admin")  # don't auto-restart self
-AUTO_RESTART_AGENTS = [a["name"] for a in AGENTS if a["name"] != ADMIN_AGENT]
-STATE_FILE = os.path.expanduser(f"~/{ADMIN_AGENT}/logs/agent_health_state.json")
+AUTO_RESTART_AGENTS = ["vera", "nate", "blake", "julie", "macgyver", "dereklm"]  # not derek (self)
+STATE_FILE = os.path.expanduser("~/derek/logs/agent_health_state.json")
 
 
 def load_state():

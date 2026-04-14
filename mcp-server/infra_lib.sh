@@ -2,7 +2,7 @@
 # Infrastructure Logging & Alerting Library
 # Source this in any infra script:
 #   COMPONENT_LOG="/path/to/component.log"
-#   source "$(dirname "$(realpath "$0")")/infra_lib.sh"
+#   source "/Users/YOUR_MAC_USERNAME/derek/skills/admin-mcp/infra_lib.sh"
 #
 # Provides:
 #   infra_info     COMPONENT "message"  — log INFO, no alert
@@ -11,26 +11,26 @@
 #   infra_critical COMPONENT "message"  — log CRITICAL + Telegram alert
 #
 # All entries go to:
-#   1. Central log: ~/logs/infra.log (all systems)
+#   1. Central log: ~/derek/logs/infra.log (all systems)
 #   2. Component log: $COMPONENT_LOG (set before sourcing)
 #
 # Trace IDs: Auto-generated per invocation. Override by setting TRACE_ID before sourcing.
 
-INFRA_LOG_DIR="$HOME/logs"
+INFRA_LOG_DIR="/Users/YOUR_MAC_USERNAME/derek/logs"
 INFRA_LOG="$INFRA_LOG_DIR/infra.log"
-INFRA_CHAT_ID="${ADMIN_TELEGRAM_CHAT_ID:-}"
+INFRA_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
 
 # Generate trace ID: epoch-PID
 : "${TRACE_ID:=$(date +%s)-$$}"
 
 mkdir -p "$INFRA_LOG_DIR"
 
-# Lazy-load admin bot token for alerts
+# Lazy-load Derek's bot token for alerts
 _INFRA_BOT_TOKEN=""
 _infra_bot_token() {
     if [ -z "$_INFRA_BOT_TOKEN" ]; then
-        # Read from admin agent's Telegram channel .env file
-        local envfile="$HOME/.claude/channels/telegram/.env"
+        # Read from Derek's Telegram channel .env file
+        local envfile="/Users/YOUR_MAC_USERNAME/.claude/channels/telegram/.env"
         if [ -f "$envfile" ]; then
             _INFRA_BOT_TOKEN=$(grep '^TELEGRAM_BOT_TOKEN=' "$envfile" | cut -d= -f2-)
         fi

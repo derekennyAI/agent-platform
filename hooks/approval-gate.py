@@ -1,28 +1,21 @@
 #!/usr/bin/env python3
 """
-PreToolUse hook: Two-tier approval gate.
+PreToolUse hook: Two-tier approval gate using Supabase.
 
-ADMIN TIER (routes to platform admin):
-  - Modifying shared infra (MCP server code, scheduler executor, infra scripts)
-  - Cross-workspace file access (touching another agent's directory)
-  - Git push to platform/infra repos
-  - Shared Supabase schema changes
+Flow:
+1. Hook catches a risky operation
+2. Checks Supabase for a recent approval matching this request
+3. If approved → allow (exit silently)
+4. If no approval → write pending request to Supabase → deny
+5. The agent sees the denial, sends user a Telegram message explaining what needs approval
+6. User approves via Telegram (agent updates Supabase row)
+7. Agent retries → hook sees approval → allows
 
-USER TIER (routes to the agent's own user):
-  - Sending emails
-  - Sending messages (iMessage)
-  - External API posts
-  - Creating PRs/issues
+No Telegram polling from the hook = no conflict with the channels plugin.
 
-NO GATE (just happens):
-  - Agent editing its own workspace files (CLAUDE.md, scheduled tasks, credentials)
-  - Reading files, searching, normal tool use
-  - Telegram replies (would break the agent)
-
-Config:
-  Set AGENT_NAME env var to identify the agent.
-  Set APPROVAL_GATE_ADMIN_CHAT to override admin chat ID.
-  Bot token is read from the agent's Telegram channel .env file.
+ADMIN TIER: Shared infra changes → routed to platform admin
+USER TIER: Operational actions → routed to agent's own user
+NO GATE: Own workspace edits, reads, Telegram replies
 """
 
 import json, sys, os, time, urllib.request, urllib.parse, hashlib, re
@@ -30,9 +23,8 @@ import json, sys, os, time, urllib.request, urllib.parse, hashlib, re
 # --- Config ---
 AGENT_NAME = os.environ.get("AGENT_NAME", "derek")
 HOME = os.path.expanduser("~")
-ADMIN_CHAT_ID = os.environ.get("APPROVAL_GATE_ADMIN_CHAT", "")  # Set in .env or plist
-APPROVALS_DIR = os.path.join(HOME, ".claude", "hooks", "approvals")
-TIMEOUT_SECONDS = 120
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 # Agent workspace directories
 AGENT_WORKSPACES = {
@@ -46,248 +38,260 @@ AGENT_WORKSPACES = {
     "test": os.path.join(HOME, "test"),
 }
 
-# Bot token file per agent
-def get_bot_token_file(agent):
-    if agent == "derek":
-        return os.path.join(HOME, ".claude", "channels", "telegram", ".env")
-    return os.path.join(HOME, ".claude", "channels", f"telegram_{agent}", ".env")
-
-# User chat IDs per agent (their Telegram user)
-# These get populated as users onboard — fall back to admin if unknown
-USER_CHAT_IDS = {
-    # Map agent names to their user's Telegram chat ID
-    # Fill these in as users onboard. Falls back to ADMIN_CHAT_ID if None.
-    # Example: "my_agent": "123456789",
-}
-
-# --- Shared infra paths (admin gate if touched) ---
+# --- Shared infra paths (admin gate if touched by sub-agents) ---
 SHARED_INFRA_PATTERNS = [
-    r"/derek/skills/admin-mcp/",          # MCP server, scheduler
-    r"/derek/scripts/",                    # infra scripts
-    r"mcp-server/server\.js",             # MCP server code
-    r"scheduler_executor",                 # scheduler engine
-    r"infra_lib\.sh",                      # shared infra lib
-    r"refresh_all_agents\.sh",             # token refresh
-    r"security_watch\.py",                 # security scanner
-    r"agent_health_check\.py",             # health monitoring
+    r"/derek/skills/admin-mcp/",
+    r"/derek/scripts/",
+    r"mcp-server/server\.js",
+    r"scheduler_executor",
+    r"infra_lib\.sh",
+    r"refresh_all_agents\.sh",
+    r"security_watch\.py",
+    r"agent_health_check\.py",
 ]
+
 
 # --- Classification ---
 
 def classify_action(tool_name, tool_input):
-    """
-    Returns: "admin", "user", or None (no gate).
-    """
-    # Never gate these tools
-    if tool_name in {"Read", "Glob", "Grep", "Agent", "TaskCreate", "TaskUpdate",
-                     "TaskGet", "TaskList", "TaskOutput", "TaskStop",
-                     "mcp__plugin_telegram_telegram__react",
-                     "mcp__plugin_telegram_telegram__reply",
-                     "mcp__plugin_telegram_telegram__edit_message",
-                     "ToolSearch", "Skill"}:
+    """Returns: "admin", "user", or None (no gate)."""
+
+    # --- Always ungated (read-only, navigation, telemetry) ---
+    UNGATED_TOOLS = {
+        "Read", "Glob", "Grep", "Agent", "TaskCreate", "TaskUpdate",
+        "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+        "mcp__plugin_telegram_telegram__react",
+        "mcp__plugin_telegram_telegram__reply",
+        "mcp__plugin_telegram_telegram__edit_message",
+        "mcp__plugin_telegram_telegram__download_attachment",
+        "mcp__plugin_imessage_imessage__chat_messages",
+        "ToolSearch", "Skill", "CronCreate", "CronDelete", "CronList",
+        "Monitor", "WebFetch", "WebSearch",
+    }
+
+    # --- MCP tools: read-only / telemetry (always ungated) ---
+    UNGATED_MCP = {
+        "mcp__admin-control__get_credential",
+        "mcp__admin-control__list_credentials",
+        "mcp__admin-control__list_scheduled_tasks",
+        "mcp__admin-control__list_pending_tasks",
+        "mcp__admin-control__list_skill_catalog",
+        "mcp__admin-control__list_skills",
+        "mcp__admin-control__list_agents",
+        "mcp__admin-control__list_state",
+        "mcp__admin-control__get_state",
+        "mcp__admin-control__get_agent_info",
+        "mcp__admin-control__my_skills",
+        "mcp__admin-control__verify_task",
+        "mcp__admin-control__complete_task",
+        "mcp__admin-control__list_heartbeats",
+        "mcp__admin-control__log_interaction",
+        "mcp__admin-control__log_infra_event",
+        "mcp__admin-control__start_session",
+        "mcp__admin-control__end_session",
+    }
+
+    # --- MCP tools: user-tier gated (destructive or outbound) ---
+    USER_GATED_MCP = {
+        "mcp__admin-control__schedule_task",
+        "mcp__admin-control__update_scheduled_task",
+        "mcp__admin-control__delete_scheduled_task",
+        "mcp__admin-control__store_credential",
+        "mcp__admin-control__revoke_credential",
+        "mcp__admin-control__connect_service",
+        "mcp__admin-control__disconnect_service",
+        "mcp__admin-control__grant_skill",
+        "mcp__admin-control__revoke_skill",
+        "mcp__admin-control__set_state",
+        "mcp__admin-control__delete_state",
+        "mcp__admin-control__update_agent_status",
+        "mcp__admin-control__run_skill",
+        "mcp__admin-control__add_heartbeat",
+        "mcp__admin-control__update_heartbeat",
+        "mcp__admin-control__delete_heartbeat",
+    }
+
+    # --- Admin-tier MCP tools ---
+    ADMIN_GATED_MCP = {
+        "mcp__admin-control__create_admin_task",
+    }
+
+    if tool_name in UNGATED_TOOLS or tool_name in UNGATED_MCP:
         return None
 
-    # Derek manages infra — never gate his own infra operations
-    # Admin gate only fires for SUB-AGENTS touching shared infra
+    if tool_name in ADMIN_GATED_MCP:
+        return "admin"
+
+    if tool_name in USER_GATED_MCP:
+        # Derek manages infra — scheduling and state are part of his job
+        if AGENT_NAME == "derek":
+            return None
+        return "user"
+
+    # --- iMessage send ---
+    if tool_name == "mcp__plugin_imessage_imessage__reply":
+        return "user"
+
+    # --- Derek: only gate email/iMessage sends ---
     if AGENT_NAME == "derek":
-        # Derek only gets user-tier gates (email sends, iMessage)
         if tool_name == "Bash":
             cmd = tool_input.get("command", "")
             if re.search(r"send_email", cmd, re.IGNORECASE):
                 return "user"
             return None
-        if tool_name == "mcp__plugin_imessage_imessage__reply":
-            return "user"
         return None
+
+    # === Sub-agent rules below ===
 
     my_workspace = AGENT_WORKSPACES.get(AGENT_NAME, "")
 
-    # --- Check Edit/Write for what they're touching ---
+    # --- Edit/Write ---
     if tool_name in ("Edit", "Write"):
         file_path = tool_input.get("file_path", "")
-
-        # Own workspace = no gate
         if my_workspace and file_path.startswith(my_workspace):
             return None
-
-        # Shared infra = admin gate
         for pattern in SHARED_INFRA_PATTERNS:
             if re.search(pattern, file_path):
                 return "admin"
-
-        # Another agent's workspace = admin gate
         for agent, ws in AGENT_WORKSPACES.items():
             if agent != AGENT_NAME and ws and file_path.startswith(ws):
                 return "admin"
-
-        # Other files (e.g., own .claude config) = no gate
         return None
 
-    # --- Check Bash commands ---
+    # --- Bash ---
     if tool_name == "Bash":
         cmd = tool_input.get("command", "")
 
-        # Git push to shared repos = admin
+        # Admin tier: shared infra modifications
         if re.search(r"git push", cmd, re.IGNORECASE):
-            # Push to own repo is fine, push to platform/infra = admin
             if re.search(r"agent-platform|agent-infra", cmd, re.IGNORECASE):
                 return "admin"
-
-        # Modifying shared infra via bash
-        # Only gate destructive writes — not reads or copies FROM infra
         for pattern in SHARED_INFRA_PATTERNS:
             if re.search(pattern, cmd):
-                # Writes: redirect into infra, delete, move, or edit in-place
                 if re.search(r"(>\s*" + pattern + r"|>>\s*" + pattern + r"|rm .*" + pattern + r"|mv .*" + pattern + r"|sed -i.*" + pattern + r")", cmd):
                     return "admin"
-
-        # Supabase schema changes = admin
         if re.search(r"CREATE TABLE|ALTER TABLE|DROP TABLE|CREATE INDEX", cmd, re.IGNORECASE):
             return "admin"
 
-        # Email sends = user gate
+        # Admin tier: process/daemon management
+        if re.search(r"launchctl\s+(unload|load|remove|bootout|disable)", cmd, re.IGNORECASE):
+            return "admin"
+
+        # User tier: outbound email (any method)
         if re.search(r"send_email", cmd, re.IGNORECASE):
             return "user"
+        if re.search(r"googleapis\.com/gmail.*send|gmail\.users\.messages\.send", cmd, re.IGNORECASE):
+            return "user"
+        if re.search(r"graph\.microsoft\.com/.*/sendMail", cmd, re.IGNORECASE):
+            return "user"
 
-        # No gate for other bash commands
+        # User tier: calendar writes (POST/PUT/PATCH/DELETE)
+        if re.search(r"googleapis\.com/calendar", cmd, re.IGNORECASE):
+            if re.search(r"-X\s*(POST|PUT|PATCH|DELETE)", cmd, re.IGNORECASE):
+                return "user"
+        if re.search(r"graph\.microsoft\.com/.*/events", cmd, re.IGNORECASE):
+            if re.search(r"-X\s*(POST|PUT|PATCH|DELETE)", cmd, re.IGNORECASE):
+                return "user"
+        if re.search(r"caldav\.icloud\.com", cmd, re.IGNORECASE):
+            if re.search(r"-X\s*(PUT|DELETE|PROPPATCH)", cmd, re.IGNORECASE):
+                return "user"
+
+        # User tier: Notion destructive writes
+        if re.search(r"api\.notion\.com", cmd, re.IGNORECASE):
+            if re.search(r"-X\s*(DELETE|PATCH)", cmd, re.IGNORECASE):
+                return "user"
+
+        # User tier: external service modifications
+        if re.search(r"bugherd\.com.*-X\s*(POST|PUT|PATCH|DELETE)", cmd, re.IGNORECASE):
+            return "user"
+        if re.search(r"api\.track\.toggl\.com.*(POST|PUT|PATCH|DELETE)", cmd, re.IGNORECASE):
+            return "user"
+
+        # User tier: destructive file/git operations
+        if re.search(r"\brm\s+-r|\brmdir\b|\brm\s+", cmd) and not re.search(r"\.pyc|__pycache__|\.tmp|/tmp/", cmd):
+            return "user"
+        if re.search(r"git\s+(reset\s+--hard|clean\s+-[fd]|checkout\s+\.)", cmd, re.IGNORECASE):
+            return "user"
+
+        # User tier: process killing
+        if re.search(r"\bkill\b|\bpkill\b|\bkillall\b", cmd):
+            return "user"
+
+        # User tier: Gmail modifications (archive, delete)
+        if re.search(r"gmail_inbox\.py.*\b(archive|batch-archive|delete)\b", cmd, re.IGNORECASE):
+            return "user"
+
         return None
 
-    # --- iMessage sends = user gate ---
-    if tool_name == "mcp__plugin_imessage_imessage__reply":
-        return "user"
-
-    # --- Everything else = no gate ---
     return None
 
 
-# --- Telegram helpers ---
+# --- Supabase helpers ---
 
-def get_bot_token():
-    token_file = get_bot_token_file(AGENT_NAME)
+def supabase_request(method, path, data=None):
+    """Make a request to Supabase REST API."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    payload = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=payload, method=method)
+    req.add_header("apikey", SUPABASE_KEY)
+    req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+    req.add_header("Content-Type", "application/json")
+    if method == "POST":
+        req.add_header("Prefer", "return=representation")
     try:
-        with open(token_file) as f:
-            for line in f:
-                if line.startswith("TELEGRAM_BOT_TOKEN="):
-                    return line.strip().split("=", 1)[1]
-    except FileNotFoundError:
-        pass
-    return None
+        resp = urllib.request.urlopen(req, timeout=10)
+        return json.loads(resp.read())
+    except Exception:
+        return None
 
 
-def send_telegram(token, chat_id, text):
-    data = urllib.parse.urlencode({
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }).encode()
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        data=data,
-    )
-    resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
-    return resp.get("result", {}).get("message_id")
+def check_approval(request_id):
+    """Check if this request has been approved in Supabase."""
+    result = supabase_request("GET",
+        f"approval_requests?request_id=eq.{request_id}&status=eq.approved&select=id")
+    return bool(result)
 
 
-def get_updates(token, offset=0):
-    data = urllib.parse.urlencode({
-        "offset": offset,
-        "timeout": 5,
-        "allowed_updates": json.dumps(["message"]),
-    }).encode()
-    req = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/getUpdates",
-        data=data,
-    )
-    resp = json.loads(urllib.request.urlopen(req, timeout=15).read())
-    return resp.get("result", [])
+def create_pending_request(request_id, tier, tool_name, tool_summary):
+    """Write a pending approval request to Supabase."""
+    supabase_request("POST", "approval_requests", {
+        "agent_name": AGENT_NAME,
+        "request_id": request_id,
+        "tier": tier,
+        "tool_name": tool_name,
+        "tool_summary": tool_summary[:500] if tool_summary else "",
+        "status": "pending",
+    })
 
 
-def check_approval_cache(request_id):
-    cache_file = os.path.join(APPROVALS_DIR, f"{request_id}.approved")
-    if os.path.exists(cache_file):
-        age = time.time() - os.path.getmtime(cache_file)
-        if age < 300:
-            os.remove(cache_file)
-            return True
-    return False
+def make_request_id(tool_name, tool_input):
+    """Deterministic ID for this request. Excludes volatile fields like 'description'."""
+    stable_input = {k: v for k, v in tool_input.items() if k not in ("description",)}
+    content = f"{AGENT_NAME}:{tool_name}:{json.dumps(stable_input, sort_keys=True)}"
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def save_approval(request_id):
-    os.makedirs(APPROVALS_DIR, exist_ok=True)
-    with open(os.path.join(APPROVALS_DIR, f"{request_id}.approved"), "w") as f:
-        f.write("approved")
-
-
-def request_approval(token, chat_id, tier, tool_name, tool_input):
-    """Send approval request and poll for response. Returns True (approved) or False (denied)."""
-    request_id = hashlib.sha256(
-        f"{tool_name}:{json.dumps(tool_input, sort_keys=True)}".encode()
-    ).hexdigest()[:12]
-
-    if check_approval_cache(request_id):
-        return True
-
-    # Format summary
+def make_summary(tool_name, tool_input):
+    """Human-readable summary of what the tool call does."""
     if tool_name == "Bash":
-        cmd = tool_input.get("command", "")[:200]
-        summary = f"<b>Command:</b> <code>{cmd}</code>"
+        return tool_input.get("command", "")[:300]
     elif tool_name in ("Edit", "Write"):
-        path = tool_input.get("file_path", "")
-        summary = f"<b>File:</b> <code>{path}</code>"
-    else:
-        summary = f"<b>Tool:</b> <code>{tool_name}</code>"
+        return f"Modify file: {tool_input.get('file_path', '')}"
+    elif tool_name == "mcp__plugin_imessage_imessage__reply":
+        return f"Send iMessage to chat {tool_input.get('chat_id', '?')}"
+    return f"{tool_name}: {json.dumps(tool_input)[:200]}"
 
-    tier_label = "🔴 ADMIN" if tier == "admin" else "🟡 USER"
-    agent_label = f" [{AGENT_NAME}]" if AGENT_NAME != "derek" else ""
 
-    msg = (
-        f"{tier_label} <b>Approval Required</b>{agent_label}\n\n"
-        f"{summary}\n\n"
-        f"Reply <b>yes</b> or <b>no</b>. Auto-denies in {TIMEOUT_SECONDS}s."
-    )
+# --- Launch Gate ---
 
-    try:
-        send_telegram(token, chat_id, msg)
-    except Exception:
-        return True  # fail open if can't notify
-
-    # Poll for response
-    try:
-        updates = get_updates(token, offset=0)
-        last_update_id = (updates[-1]["update_id"] + 1) if updates else 0
-    except Exception:
-        last_update_id = 0
-
-    start = time.time()
-    while time.time() - start < TIMEOUT_SECONDS:
-        try:
-            updates = get_updates(token, offset=last_update_id)
-            for update in updates:
-                last_update_id = update["update_id"] + 1
-                msg_obj = update.get("message", {})
-                text = msg_obj.get("text", "").strip().lower()
-                from_id = str(msg_obj.get("from", {}).get("id", ""))
-
-                if from_id != chat_id:
-                    continue
-
-                if text in ("yes", "y", "approve", "ok", "go"):
-                    save_approval(request_id)
-                    send_telegram(token, chat_id, "✅ Approved.")
-                    return True
-                elif text in ("no", "n", "deny", "stop", "nope"):
-                    send_telegram(token, chat_id, "❌ Denied.")
-                    return False
-        except Exception:
-            pass
-        time.sleep(3)
-
-    # Timeout
-    try:
-        send_telegram(token, chat_id, "⏰ Timed out — denied.")
-    except Exception:
-        pass
-    return False
+def is_agent_ready():
+    """Check if the agent has completed startup. Returns True if ready."""
+    workspace = AGENT_WORKSPACES.get(AGENT_NAME, "")
+    if not workspace:
+        return True
+    return os.path.exists(os.path.join(workspace, ".ready"))
 
 
 # --- Main ---
@@ -302,34 +306,62 @@ def main():
     tool_name = data.get("tool_name", "")
     tool_input = data.get("tool_input", {})
 
+    # Launch gate: block Telegram replies until agent startup completes
+    if not is_agent_ready():
+        BLOCKED_DURING_STARTUP = {
+            "mcp__plugin_telegram_telegram__reply",
+            "mcp__plugin_telegram_telegram__edit_message",
+            "mcp__plugin_imessage_imessage__reply",
+        }
+        if tool_name in BLOCKED_DURING_STARTUP:
+            json.dump({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "STARTUP_IN_PROGRESS — complete all startup-instructions.md steps first, then create the .ready file in your workspace before responding to messages.",
+                }
+            }, sys.stdout)
+            sys.exit(0)
+
     tier = classify_action(tool_name, tool_input)
 
     if tier is None:
-        sys.exit(0)  # no gate, allow
-
-    token = get_bot_token()
-    if not token:
-        sys.exit(0)  # fail open
-
-    # Route to the right person
-    if tier == "admin":
-        chat_id = ADMIN_CHAT_ID
-    else:
-        chat_id = USER_CHAT_IDS.get(AGENT_NAME) or ADMIN_CHAT_ID  # fall back to admin
-
-    approved = request_approval(token, chat_id, tier, tool_name, tool_input)
-
-    if approved:
-        sys.exit(0)  # allow
-    else:
+        # Ungated — explicitly allow so the built-in permission system is skipped
         json.dump({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"Denied via Telegram ({tier} tier)",
+                "permissionDecision": "allow",
             }
         }, sys.stdout)
         sys.exit(0)
+
+    # Gated action — check Supabase for existing approval, deny if none
+    request_id = make_request_id(tool_name, tool_input)
+
+    if check_approval(request_id):
+        # Already approved in Supabase — allow
+        json.dump({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            }
+        }, sys.stdout)
+        sys.exit(0)
+
+    # Not approved — create pending request and deny with reason
+    summary = make_summary(tool_name, tool_input)
+    create_pending_request(request_id, tier, tool_name, summary)
+
+    json.dump({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                f"APPROVAL_NEEDED [{tier}] request_id={request_id} | {summary}"
+            ),
+        }
+    }, sys.stdout)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

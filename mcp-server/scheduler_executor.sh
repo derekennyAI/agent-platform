@@ -28,7 +28,7 @@ PYEOF
 fi
 
 # Supabase config
-SUPABASE_URL="${SUPABASE_URL:-${SUPABASE_URL}}"
+SUPABASE_URL="${SUPABASE_URL:-https://mfrzhijvfbwumutajqeh.supabase.co}"
 SUPABASE_KEY="${SUPABASE_SERVICE_KEY:-}"
 
 # Source infra logging library
@@ -81,7 +81,7 @@ import json, os, sys, urllib.request, urllib.error
 tasks_file = os.environ.get("TASKS_FILE", "scheduled_tasks.json")
 svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
 base_url = os.environ.get("SUPABASE_URL", "")
-chat_id = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "${ADMIN_TELEGRAM_CHAT_ID:-}")
+chat_id = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
 
 if not svc_key or not base_url:
     sys.exit(0)
@@ -322,7 +322,7 @@ recurring = '$recurring'
 deactivate = recurring.lower() == 'false'
 
 svc_key = os.environ.get('SUPABASE_SERVICE_KEY', '')
-base_url = os.environ.get('SUPABASE_URL', '${SUPABASE_URL}')
+base_url = os.environ.get('SUPABASE_URL', 'https://mfrzhijvfbwumutajqeh.supabase.co')
 
 # Primary: Update Supabase
 if svc_key:
