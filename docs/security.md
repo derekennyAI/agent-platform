@@ -105,7 +105,7 @@ for agent, ws in AGENT_WORKSPACES.items():
         return "admin"
 ```
 
-If agent "vera" tries to write to `/Users/dereknewman/nate/anything.py`, the approval gate triggers an admin-tier approval request. The platform admin must explicitly approve cross-workspace access.
+If agent "vera" tries to write to `/Users/YOUR_MAC_USERNAME/nate/anything.py`, the approval gate triggers an admin-tier approval request. The platform admin must explicitly approve cross-workspace access.
 
 **3. MCP server scoping:**
 
@@ -205,7 +205,7 @@ After a new skill is built, the validator scans its code for security violations
 - These should use the vault instead
 
 **Cross-workspace file access (severity: critical):**
-- Hardcoded references to other agents' home directories (e.g., `/Users/dereknewman/vera/` in nate's skill)
+- Hardcoded references to other agents' home directories (e.g., `/Users/YOUR_MAC_USERNAME/vera/` in nate's skill)
 - Generated dynamically from the `KNOWN_AGENTS` environment variable
 
 **Non-vault credential patterns (severity: medium):**
@@ -260,7 +260,7 @@ Found 3 security violation(s):
   [CRITICAL] (1):
     skills/bad-skill/main.py:15
       Cross-workspace access to derek's directory
-      > with open("/Users/dereknewman/derek/memory/secrets.md") as f:
+      > with open("/Users/YOUR_MAC_USERNAME/derek/memory/secrets.md") as f:
 
   [HIGH] (1):
     skills/bad-skill/main.py:23

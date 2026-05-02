@@ -130,7 +130,7 @@ def cmd_exchange(args):
     svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not svc_key:
         # Fallback: read from Management API token for DB query
-        svc_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mcnpoaWp2ZmJ3dW11dGFqcWVoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjgzNDMyNywiZXhwIjoyMDg4NDEwMzI3fQ.W6AmTsNcMNo4LHZcjKCOVgzWPasciEtM9KhLAkeKDKE"
+        svc_key = "YOUR_JWT_TOKEN"
 
     expires_at = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=token_data.get("expires_in", 28800))).isoformat()
     account_email = token_data.get("account", {}).get("email_address", "unknown")
