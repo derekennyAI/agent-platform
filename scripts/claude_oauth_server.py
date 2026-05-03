@@ -5,7 +5,7 @@ Hosts a web page where users paste their OAuth code after authorizing.
 Exchanges the code for a token and saves it.
 
 Usage:
-  python3 claude_oauth_server.py --agent <agent-name> --port 8285
+  python3 claude_oauth_server.py --agent vera --port 8285
 
 Flow:
   1. Script generates PKCE values + auth URL
@@ -14,11 +14,6 @@ Flow:
   4. User pastes code into form
   5. Server exchanges code for token via platform.claude.com
   6. Saves token to agent's config directory
-
-Prerequisites:
-  - Agent must already be created (via create_agent.py)
-  - Port must be accessible to the user's browser (local or via Tailscale/ngrok)
-  - User needs a Claude Pro or Max subscription to authorize
 """
 
 import argparse
@@ -39,31 +34,16 @@ TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
 SCOPES = "user:profile user:inference user:sessions:claude_code"
 
-# Look for agents.json relative to this script's directory
-SCRIPT_DIR = Path(__file__).resolve().parent
-PLATFORM_DIR = SCRIPT_DIR.parent
-AGENTS_JSON = PLATFORM_DIR / "configs" / "agents.json"
+AGENTS_JSON = Path.home() / "derek" / "skills" / "agent-setup" / "agents.json"
 
 
 def load_agent_config(agent_name):
-    """Load agent config from agents.json or fall back to workspace discovery."""
-    if AGENTS_JSON.exists():
-        with open(AGENTS_JSON) as f:
-            agents = json.load(f).get("agents", {})
-        if agent_name in agents:
-            return agents[agent_name]
-
-    # Fallback: construct config from workspace convention
-    workspace = Path.home() / agent_name
-    if not workspace.exists():
-        print(f"Agent '{agent_name}' not found in agents.json and no workspace at {workspace}")
+    with open(AGENTS_JSON) as f:
+        agents = json.load(f)["agents"]
+    if agent_name not in agents:
+        print(f"Unknown agent: {agent_name}. Available: {list(agents.keys())}")
         sys.exit(1)
-
-    return {
-        "workspace": str(workspace),
-        "human": agent_name.title(),
-        "persona": agent_name.title(),
-    }
+    return agents[agent_name]
 
 
 def generate_pkce():
@@ -271,7 +251,7 @@ class OAuthHandler(http.server.BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Claude OAuth server for agent setup")
-    parser.add_argument("--agent", required=True, help="Agent name (must exist as ~/agent-name/ or in configs/agents.json)")
+    parser.add_argument("--agent", required=True, help="Agent name from agents.json")
     parser.add_argument("--port", type=int, default=8285, help="Port to listen on")
     args = parser.parse_args()
 
@@ -283,13 +263,13 @@ def main():
     server.auth_url = auth_url
     server.verifier = verifier
     server.agent_name = args.agent
-    server.human_name = agent_config.get("human", args.agent.title())
-    server.persona = agent_config.get("persona", args.agent.title())
+    server.human_name = agent_config["human"]
+    server.persona = agent_config["persona"]
     server.agent_config = agent_config
     server.exchange_complete = False
     server.token_data = None
 
-    print(f"OAuth server for {server.persona} ({server.human_name})")
+    print(f"OAuth server for {agent_config['persona']} ({agent_config['human']})")
     print(f"Listening on port {args.port}")
     print(f"Auth URL: {auth_url}")
     print(f"Waiting for user to complete OAuth flow...")

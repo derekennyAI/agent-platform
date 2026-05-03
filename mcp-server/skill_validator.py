@@ -24,7 +24,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 # --- Violation patterns ---
@@ -41,13 +41,14 @@ CREDENTIAL_FILE_PATTERNS = [
 ]
 
 # Cross-workspace access patterns
-# Cross-workspace patterns are generated dynamically from HOME directory
-# Add agent names here as you create them
-_KNOWN_AGENTS = os.environ.get("KNOWN_AGENTS", "").split(",") if os.environ.get("KNOWN_AGENTS") else []
-_HOME = str(Path.home())
 CROSS_WORKSPACE_PATTERNS = [
-    (rf'{re.escape(_HOME)}/{agent}/', f"Cross-workspace access to {agent}'s directory")
-    for agent in _KNOWN_AGENTS if agent
+    (r'/Users/YOUR_MAC_USERNAME/derek/\.config/', "Direct access to Derek's config directory"),
+    (r'/Users/YOUR_MAC_USERNAME/vera/', "Cross-workspace access to Vera's directory"),
+    (r'/Users/YOUR_MAC_USERNAME/nate/', "Cross-workspace access to Nate's directory"),
+    (r'/Users/YOUR_MAC_USERNAME/blake/', "Cross-workspace access to Blake's directory"),
+    (r'/Users/YOUR_MAC_USERNAME/julie/', "Cross-workspace access to Julie's directory"),
+    (r'/Users/YOUR_MAC_USERNAME/macgyver/', "Cross-workspace access to Macgyver's directory"),
+    (r'/Users/YOUR_MAC_USERNAME/dereklm/', "Cross-workspace access to DerekLM's directory"),
 ]
 
 # Non-vault credential patterns
@@ -127,7 +128,7 @@ def scan_file(filepath, agent_name=None):
         for pattern, message in CROSS_WORKSPACE_PATTERNS:
             if re.search(pattern, line):
                 # If we know the agent, allow access to their own workspace
-                if agent_name and f"{_HOME}/{agent_name}/" in line:
+                if agent_name and f"/Users/YOUR_MAC_USERNAME/{agent_name}/" in line:
                     continue
                 violations.append({
                     "file": str(path),
