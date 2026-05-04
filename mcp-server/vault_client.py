@@ -26,7 +26,7 @@ import json
 import os
 import urllib.request
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 AGENT_NAME = os.environ.get("AGENT_NAME", "derek")
 

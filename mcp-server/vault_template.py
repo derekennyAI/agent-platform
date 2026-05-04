@@ -35,7 +35,7 @@ if not AGENT_NAME:
     )
 
 # --- Workspace paths (scoped to this agent) ---
-WORKSPACE = Path.home() / AGENT_NAME
+WORKSPACE = Path(f"/Users/YOUR_MAC_USERNAME/{AGENT_NAME}")
 CONFIG_DIR = WORKSPACE / ".config" / AGENT_NAME
 ACCOUNTS_DIR = CONFIG_DIR / "accounts"
 
