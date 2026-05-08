@@ -174,27 +174,23 @@ def check_contacts_whitelist(to_email):
 
 
 def refresh_access_token(creds, token_data):
-    """Refresh the access token using the refresh token."""
-    refresh_token = token_data.get("refresh_token")
-    if not refresh_token:
-        print("[error] no refresh token found", file=sys.stderr)
-        sys.exit(1)
-
-    client = creds.get("installed", creds)
-    data = urllib.parse.urlencode({
-        "client_id": client["client_id"],
-        "client_secret": client["client_secret"],
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token",
-    }).encode()
-
-    req = urllib.request.Request(TOKEN_URI, data=data)
-    with urllib.request.urlopen(req) as resp:
-        new_token = json.loads(resp.read().decode())
-
-    # Preserve refresh token (not always returned on refresh)
-    new_token["refresh_token"] = refresh_token
-    return new_token
+    """Force-refresh via the shared helper. `creds` ignored (helper resolves
+    credentials as a sibling of the token file). Caller passes the token_path
+    via _auth['token_path'] in this script's call site, but the helper needs
+    it directly — we look it up in module-level state."""
+    import sys as _sys
+    _sys.path.insert(0, "/Users/YOUR_MAC_USERNAME/derek/skills/_lib")
+    from google_auth import get_token as _gauth_get_token
+    token_path = _auth.get("token_path") if "_auth" in globals() else None
+    if not token_path:
+        # Fall back to discovery: use the first matching path on disk.
+        paths = _find_token_paths() if "_find_token_paths" in globals() else []
+        if not paths:
+            raise RuntimeError("no google-token.json path resolvable")
+        token_path = paths[0]
+    _gauth_get_token(token_path, force_refresh=True)
+    with open(token_path) as f:
+        return json.load(f)
 
 
 def send_email(access_token, to, subject, body, content_type="plain"):
@@ -225,48 +221,13 @@ def send_email(access_token, to, subject, body, content_type="plain"):
 
 def main():
     parser = argparse.ArgumentParser(description=f"Send email via Gmail (agent: {_AGENT_NAME}, from: {FROM_EMAIL})")
-    parser.add_argument("--to", default=None, help="Recipient email")
-    parser.add_argument("--subject", default=None, help="Email subject")
+    parser.add_argument("--to", required=True, help="Recipient email")
+    parser.add_argument("--subject", required=True, help="Email subject")
     parser.add_argument("--body", default=None, help="Email body text")
     parser.add_argument("--body-file", default=None, help="Read body from file")
     parser.add_argument("--stdin", action="store_true", help="Read body from stdin")
     parser.add_argument("--html", action="store_true", help="Send as HTML instead of plain text")
-    parser.add_argument("--config", default=None, help="JSON config file with to/subject/body/body_file/html keys")
-    parser.add_argument("--no-email", action="store_true", help="Skip email, only run post-send hooks (e.g. Telegram notify)")
     args = parser.parse_args()
-
-    # Load from config file if provided (allows spaces in subject/body without shell quoting issues)
-    if args.config:
-        cfg = json.loads(Path(args.config).read_text())
-        args.to = args.to or cfg.get("to")
-        args.subject = args.subject or cfg.get("subject")
-        args.body = args.body or cfg.get("body")
-        args.body_file = args.body_file or cfg.get("body_file")
-        args.html = args.html or cfg.get("html", False)
-
-    # Telegram-only mode: skip email entirely
-    if args.no_email:
-        if args.config:
-            cfg_data = json.loads(Path(args.config).read_text())
-            tg_chat_id = cfg_data.get("telegram_chat_id")
-            tg_token_file = cfg_data.get("telegram_token_file")
-            tg_message = cfg_data.get("telegram_message")
-            if tg_chat_id and tg_token_file and tg_message:
-                tg_token = json.loads(Path(tg_token_file).read_text()).get("botToken", "")
-                tg_payload = json.dumps({"chat_id": tg_chat_id, "text": tg_message}).encode()
-                tg_req = urllib.request.Request(
-                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                    data=tg_payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(tg_req, timeout=10) as tg_resp:
-                    tg_result = json.loads(tg_resp.read().decode())
-                print(json.dumps({"telegram": "sent", "message_id": tg_result.get("result", {}).get("message_id")}))
-        return
-
-    if not args.to or not args.subject:
-        print("[error] --to and --subject are required (or provide via --config)", file=sys.stderr)
-        sys.exit(1)
 
     # Get body
     if args.body:
@@ -320,28 +281,6 @@ def main():
     else:
         print("[error] failed to send after token refresh", file=sys.stderr)
         sys.exit(1)
-
-    # Optional Telegram notification after email send
-    if args.config:
-        cfg_data = json.loads(Path(args.config).read_text())
-        tg_chat_id = cfg_data.get("telegram_chat_id")
-        tg_token_file = cfg_data.get("telegram_token_file")
-        tg_message = cfg_data.get("telegram_message")
-        if tg_chat_id and tg_token_file and tg_message:
-            try:
-                tg_token = json.loads(Path(tg_token_file).read_text()).get("botToken", "")
-                if tg_token:
-                    tg_payload = json.dumps({"chat_id": tg_chat_id, "text": tg_message}).encode()
-                    tg_req = urllib.request.Request(
-                        f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                        data=tg_payload,
-                        headers={"Content-Type": "application/json"},
-                    )
-                    with urllib.request.urlopen(tg_req, timeout=10) as tg_resp:
-                        tg_result = json.loads(tg_resp.read().decode())
-                    print(json.dumps({"telegram": "sent", "message_id": tg_result.get("result", {}).get("message_id")}))
-            except Exception as tg_err:
-                print(f"[warn] Telegram notify failed: {tg_err}", file=sys.stderr)
 
 
 if __name__ == "__main__":

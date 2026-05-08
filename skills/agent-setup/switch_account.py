@@ -28,10 +28,10 @@ import subprocess
 import plistlib
 from pathlib import Path
 
-EDGE_FUNCTION_BASE = "os.environ.get("SUPABASE_URL", "")/functions/v1"
+EDGE_FUNCTION_BASE = "https://mfrzhijvfbwumutajqeh.supabase.co/functions/v1"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
-SCOPES = "user:inference"  # inference-only scope — sufficient for agent operation
+SCOPES = "user:profile user:inference user:sessions:claude_code"  # profile needed for /oauth/usage-check (dashboard quota)
 AGENTS_JSON = Path(__file__).parent / "agents.json"
 
 
@@ -126,11 +126,11 @@ def cmd_exchange(args):
 
     # Store tokens in Supabase agent_credentials table via REST API
     import datetime
-    supabase_url = os.environ.get("SUPABASE_URL", "")
+    supabase_url = "https://mfrzhijvfbwumutajqeh.supabase.co"
     svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not svc_key:
         # Fallback: read from Management API token for DB query
-        svc_key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1mcnpoaWp2ZmJ3dW11dGFqcWVoIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjgzNDMyNywiZXhwIjoyMDg4NDEwMzI3fQ.W6AmTsNcMNo4LHZcjKCOVgzWPasciEtM9KhLAkeKDKE"
+        svc_key = "YOUR_JWT_TOKEN"
 
     expires_at = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=token_data.get("expires_in", 28800))).isoformat()
     account_email = token_data.get("account", {}).get("email_address", "unknown")
@@ -160,7 +160,8 @@ def cmd_exchange(args):
             # Continue anyway — token was obtained, plist update is more important
 
     # Save credentials file (launcher reads this to inject CLAUDE_CODE_OAUTH_TOKEN)
-    creds_dir = Path.home() / f".claude-{args.agent}"
+    # Source of truth: registry's config_dir. Agent name != config dir (e.g. derek → ~/.claude-derek).
+    creds_dir = Path(agent["config_dir"])
     creds_dir.mkdir(exist_ok=True)
     creds_file = creds_dir / ".credentials.json"
     creds_data = {
@@ -229,7 +230,7 @@ def cmd_usage(args):
 
 
 def _get_supabase_token():
-    import sys as _sys; _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "mcp-server"))
+    import sys as _sys; _sys.path.insert(0, "/Users/YOUR_MAC_USERNAME/derek/skills/admin-mcp")
     from vault_client import load_secrets
     return load_secrets()["supabase_access_token"]
 
