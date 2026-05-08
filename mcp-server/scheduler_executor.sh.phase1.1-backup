@@ -10,11 +10,9 @@ TMUX_BIN="/opt/homebrew/bin/tmux"
 COMP="scheduler"
 
 # Load Supabase credentials from launchd plist if not already in environment
-# (crontab jobs don't inherit launchd env vars). Source: admin's daemon plist —
-# admin is the control plane, semantically the right env source. Same pattern
-# as project_memories_to_files.py.
+# (crontab jobs don't inherit launchd env vars)
 if [ -z "$SUPABASE_SERVICE_KEY" ]; then
-    _PLIST="$HOME/Library/LaunchAgents/com.admin-agent.daemon.plist"
+    _PLIST="$HOME/Library/LaunchAgents/com.claude-code.daemon.plist"
     if [ -f "$_PLIST" ]; then
         _ENV_EXPORTS=$(python3 << PYEOF
 import plistlib, shlex
@@ -37,7 +35,7 @@ SUPABASE_KEY="${SUPABASE_SERVICE_KEY:-}"
 source "$SCRIPT_DIR/infra_lib.sh"
 
 # Agent lookups — registry-driven so renames/moves don't require code edits
-REGISTRY_FILE="${REGISTRY_FILE:-/Users/YOUR_MAC_USERNAME/derek/agent-infra/agents.json}"
+REGISTRY_FILE="${REGISTRY_FILE:-/Users/dereknewman/derek/agent-infra/agents.json}"
 
 get_session() {
     /usr/bin/jq -r --arg a "$1" '.agents[$a].tmux_session // empty' "$REGISTRY_FILE" 2>/dev/null
@@ -62,20 +60,11 @@ agent_uses_channels() {
 # Phase 6 — one-shot claude -p for proactive scheduled task delivery.
 # Uses THIS AGENT'S OAuth token (per-agent quota tracking preserved).
 # Runs headless (no tmux, no --channels) in background so the scheduler continues.
-CLAUDE_BIN="/Users/YOUR_MAC_USERNAME/.local/bin/claude"
+CLAUDE_BIN="/Users/dereknewman/.local/bin/claude"
 spawn_push_oneshot() {
     local agent="$1" tid="$2" desc="$3"
     local workspace="$(get_workspace "$agent")"
     local creds_file="$HOME/.claude-${agent}/.credentials.json"
-
-    # Phase 1.2 defensive OAuth gate — push tasks require OAuth. Fail legibly
-    # for any agent without has_pro_token (e.g., a future API-key-only agent).
-    local has_pro
-    has_pro=$(/usr/bin/jq -r --arg a "$agent" '.agents[$a].has_pro_token // false' "$HOME/derek/agent-infra/agents.json" 2>/dev/null || echo "false")
-    if [ "$has_pro" != "true" ]; then
-        infra_error "$COMP" "PUSH_SPAWN_BLOCKED $tid ($agent): push requires OAuth but has_pro_token=$has_pro"
-        return 1
-    fi
 
     if [ ! -f "$creds_file" ]; then
         infra_error "$COMP" "PUSH $tid ($agent): no credentials file — cannot spawn one-shot"
@@ -99,7 +88,6 @@ spawn_push_oneshot() {
     (
         cd "$workspace"
         env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
-            PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
             CLAUDE_CODE_OAUTH_TOKEN="$oauth_token" \
             CLAUDE_CONFIG_DIR="$HOME/.claude-${agent}" \
             AGENT_NAME="$agent" \
@@ -111,44 +99,6 @@ spawn_push_oneshot() {
             >> "$push_log" 2>&1
         local rc=$?
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] END $tid (exit=$rc)" >> "$push_log"
-        if [ "$rc" -eq 0 ]; then
-            # Phase 1.2 — completion-gated last_fired_at update. Only fires when
-            # the spawned claude -p actually exited 0, so crashes/hangs leave
-            # the timestamp stale and the staleness alerter eventually pages.
-            # Loud-fail: if env loading at line 14-28 didn't populate the key,
-            # the Python block silently skips Supabase. Surface that instead of
-            # letting the column rot.
-            if [ -z "$SUPABASE_KEY" ]; then
-                infra_error "$COMP" "PUSH $tid ($agent): SUPABASE_SERVICE_KEY empty in scheduler env — last_fired_at writeback to Supabase will be SKIPPED (column will rot, staleness alerts will fire). Check $HOME/Library/LaunchAgents/com.admin-agent.daemon.plist exists and has the key."
-            fi
-            /opt/homebrew/bin/python3 - <<PYEOF >> "$push_log" 2>&1
-import json, os, urllib.request
-from datetime import datetime, timezone
-now = datetime.now(timezone.utc).isoformat()
-svc = os.environ.get("SUPABASE_SERVICE_KEY", "")
-base = os.environ.get("SUPABASE_URL", "https://mfrzhijvfbwumutajqeh.supabase.co")
-if svc:
-    try:
-        req = urllib.request.Request(
-            f"{base}/rest/v1/scheduled_tasks?id=eq.$tid",
-            data=json.dumps({"last_fired_at": now}).encode(),
-            method="PATCH",
-            headers={"apikey": svc, "Authorization": f"Bearer {svc}",
-                     "Content-Type": "application/json", "Prefer": "return=minimal"})
-        urllib.request.urlopen(req, timeout=5)
-    except Exception as e:
-        print(f"  [Phase 1.2] last_fired_at Supabase patch failed: {e}")
-try:
-    with open("$TASKS_FILE") as f: tasks = json.load(f)
-    for t in tasks:
-        if t.get("id") == "$tid":
-            t["last_fired_at"] = now
-            break
-    with open("$TASKS_FILE", "w") as f: json.dump(tasks, f, indent=2)
-except Exception as e:
-    print(f"  [Phase 1.2] local cache update failed: {e}")
-PYEOF
-        fi
     ) &
 
     return 0
@@ -245,7 +195,7 @@ import json, os, sys, urllib.request, urllib.error
 tasks_file = os.environ.get("TASKS_FILE", "scheduled_tasks.json")
 svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
 base_url = os.environ.get("SUPABASE_URL", "")
-chat_id = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")
+chat_id = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "8676483103")
 
 if not svc_key or not base_url:
     sys.exit(0)
@@ -475,9 +425,21 @@ echo "$TASK_OUTPUT" | while IFS='|' read -r idx tid agent schedule recurring tri
         if agent_uses_channels "$agent"; then
             if [ "$trigger" = "push" ]; then
                 if spawn_push_oneshot "$agent" "$tid" "$desc"; then
-                    # last_fired_at now updates inside the subshell on successful completion (Phase 1.2).
-                    # Scheduler may re-fire within the same minute if the spawn crashes — that's by design.
                     infra_info "$COMP" "PUSH $tid ($agent): one-shot claude -p spawned"
+                    # Update last_fired_at right away so scheduler doesn't re-fire next minute
+                    /opt/homebrew/bin/python3 <<LASTPY
+import json
+from datetime import datetime, timezone
+with open("$TASKS_FILE") as _f:
+    _tasks = json.load(_f)
+_now = datetime.now(timezone.utc).isoformat()
+for _t in _tasks:
+    if _t.get("id") == "$tid":
+        _t["last_fired_at"] = _now
+        break
+with open("$TASKS_FILE", "w") as _f:
+    json.dump(_tasks, _f, indent=2)
+LASTPY
                 fi
             else
                 infra_info "$COMP" "PULL $tid ($agent): delivered via list_due_tasks (not send-keys)"
@@ -596,88 +558,5 @@ if [ $((NOW_MIN % 10)) -eq 0 ] && [ -n "$SUPABASE_KEY" ]; then
     if [ -n "$HB_AGENTS" ] && [ "$HB_AGENTS" != "[]" ]; then
         HB_COUNT=$(echo "$HB_AGENTS" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
         infra_info "$COMP" "HEARTBEATS pull-only: $HB_COUNT active (no send-keys)"
-    fi
-fi
-
-
-# ==========================================
-# STALENESS ALERTER — Phase 1.2
-# ==========================================
-# With completion-gated last_fired_at, push tasks that crash/hang leave their
-# last_fired_at stale. This block detects tasks > 2× their expected cadence
-# and alerts admin via Telegram. Dedupes per-task within 6h.
-
-STALE_ALERT_DIR="/tmp/scheduler_stale_alerts"
-mkdir -p "$STALE_ALERT_DIR"
-STALE_DEDUPE_SECS=21600   # 6 hours
-
-# Only check every 10 min to save API calls + avoid Telegram rate limits
-if [ $((NOW_MIN % 10)) -eq 0 ] && [ -n "$SUPABASE_KEY" ]; then
-    STALE_ROWS=$(curl -sf "${SUPABASE_URL}/rest/v1/scheduled_tasks?active=eq.true&trigger=eq.push&select=id,agent_name,schedule,task_description,last_fired_at" \
-        -H "apikey: $SUPABASE_KEY" \
-        -H "Authorization: Bearer $SUPABASE_KEY" 2>/dev/null)
-    if [ -n "$STALE_ROWS" ] && [ "$STALE_ROWS" != "[]" ]; then
-        STALE_LIST=$(echo "$STALE_ROWS" | /opt/homebrew/bin/python3 - <<'PYEOF'
-import json, sys
-from datetime import datetime, timezone, timedelta
-tasks = json.load(sys.stdin)
-now = datetime.now(timezone.utc)
-
-def threshold_for(cron_expr):
-    parts = (cron_expr or "").split()
-    if len(parts) < 5: return timedelta(hours=48)
-    minute, hour, dom, mon, dow = parts[:5]
-    # Weekly (specific dow, any dom)
-    if dow not in ("*", "?") and dom == "*":
-        return timedelta(days=14)
-    # Every-N-min (*/N minute)
-    if "/" in minute:
-        return timedelta(hours=2)
-    # Hourly (* hour, specific minute)
-    if hour == "*" and minute != "*":
-        return timedelta(hours=6)
-    # Daily (specific hour)
-    if hour != "*":
-        return timedelta(hours=48)
-    return timedelta(hours=48)
-
-for t in tasks:
-    lfa = t.get("last_fired_at")
-    if not lfa: continue
-    try:
-        last = datetime.fromisoformat(lfa.replace("Z", "+00:00"))
-    except Exception:
-        continue
-    th = threshold_for(t.get("schedule", ""))
-    age = now - last
-    if age > th:
-        desc = (t.get("task_description") or "").split("\n")[0][:80]
-        print(f"{t.get('id')}|{t.get('agent_name','?')}|{t.get('schedule','')}|{round(age.total_seconds()/3600,1)}|{round(th.total_seconds()/3600,1)}|{desc}")
-PYEOF
-)
-        if [ -n "$STALE_LIST" ]; then
-            _ADMIN_BOT=$(/opt/homebrew/bin/python3 -c "import json; print(json.load(open('/Users/YOUR_MAC_USERNAME/.claude/channels/telegram_admin/access.json')).get('botToken',''))" 2>/dev/null || true)
-            _FARLEN="YOUR_TELEGRAM_CHAT_ID"
-            while IFS='|' read -r tid agent schedule age_h thr_h desc; do
-                [ -z "$tid" ] && continue
-                _dedupe_file="$STALE_ALERT_DIR/$tid"
-                if [ -f "$_dedupe_file" ]; then
-                    _last_alert=$(cat "$_dedupe_file" 2>/dev/null || echo 0)
-                    _now_ts=$(date +%s)
-                    if [ $((_now_ts - _last_alert)) -lt "$STALE_DEDUPE_SECS" ]; then
-                        continue
-                    fi
-                fi
-                infra_warn "$COMP" "STALE $tid ($agent): last_fired ${age_h}h ago, threshold ${thr_h}h"
-                if [ -n "$_ADMIN_BOT" ]; then
-                    _msg="⏱ Stale push task — ${agent} ${schedule} — last fired ${age_h}h ago (threshold ${thr_h}h). Task: ${desc}"
-                    curl -sf -X POST "https://api.telegram.org/bot${_ADMIN_BOT}/sendMessage" \
-                        -d "chat_id=${_FARLEN}" \
-                        -d "text=${_msg}" >/dev/null 2>&1 || true
-                fi
-                date +%s > "$_dedupe_file"
-            done <<< "$STALE_LIST"
-            unset _ADMIN_BOT
-        fi
     fi
 fi

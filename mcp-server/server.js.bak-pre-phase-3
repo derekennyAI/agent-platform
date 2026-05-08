@@ -829,14 +829,9 @@ function saveLocalTasks(tasks) {
 }
 
 async function syncToLocal() {
-  // Pull active tasks from Supabase and write to local JSON for the executor.
-  // CRITICAL: must match scheduler_executor.sh's filter (`active=eq.true`).
-  // Without this, inactive rows (e.g. paused admin_poll) leak into the local
-  // cache and mask legitimate active rows with stale state — the root cause of
-  // the 2026-04-24 admin_poll-not-firing incident.
+  // Pull all tasks from Supabase and write to local JSON for the executor
   try {
     const tasks = await supabaseQuery("scheduled_tasks", "GET", {
-      "active": "eq.true",
       "order": "agent_name,id",
     });
     if (tasks && Array.isArray(tasks)) {
@@ -1853,7 +1848,7 @@ server.tool(
 // inspect fleet health, tail logs, diagnose stuck agents, trigger deploys.
 // All admin-only (derek, dereklm).
 
-const REGISTRY_FILE = "/Users/YOUR_MAC_USERNAME/derek/agent-infra/agents.json";
+const REGISTRY_FILE = "/Users/dereknewman/derek/agent-infra/agents.json";
 const TMUX_BIN = "/opt/homebrew/bin/tmux";
 
 function loadRegistry() {
@@ -1943,10 +1938,10 @@ server.tool(
     const rows = [];
 
     for (const [name, cfg] of Object.entries(agents)) {
-      const ws = cfg.workspace || `/Users/YOUR_MAC_USERNAME/${name}`;
+      const ws = cfg.workspace || `/Users/dereknewman/${name}`;
       const readyFile = `${ws}/.ready`;
       const liabFile = `${ws}/liability_accepted.json`;
-      const daemonLog = name === "derek" ? "/Users/YOUR_MAC_USERNAME/.claude/daemon.log" : `${ws}/daemon.log`;
+      const daemonLog = name === "derek" ? "/Users/dereknewman/.claude/daemon.log" : `${ws}/daemon.log`;
       const credsFile = cfg.config_dir ? `${cfg.config_dir}/.credentials.json` : null;
 
       rows.push({
@@ -2106,8 +2101,8 @@ server.tool(
     if (!cfg) return { content: [{ type: "text", text: `Unknown agent: ${target_agent}` }] };
 
     const n = Math.min(Math.max(lines || 80, 1), 500);
-    const ws = cfg.workspace || `/Users/YOUR_MAC_USERNAME/${target_agent}`;
-    const logFile = target_agent === "derek" ? "/Users/YOUR_MAC_USERNAME/.claude/daemon.log" : `${ws}/daemon.log`;
+    const ws = cfg.workspace || `/Users/dereknewman/${target_agent}`;
+    const logFile = target_agent === "derek" ? "/Users/dereknewman/.claude/daemon.log" : `${ws}/daemon.log`;
     const content = tailFile(logFile, n);
 
     return {
@@ -2133,9 +2128,9 @@ server.tool(
     const cfg = reg[target_agent];
     if (!cfg) return { content: [{ type: "text", text: `Unknown agent: ${target_agent}` }] };
 
-    const ws = cfg.workspace || `/Users/YOUR_MAC_USERNAME/${target_agent}`;
+    const ws = cfg.workspace || `/Users/dereknewman/${target_agent}`;
     const session = cfg.tmux_session || `${target_agent}-agent`;
-    const daemonLog = target_agent === "derek" ? "/Users/YOUR_MAC_USERNAME/.claude/daemon.log" : `${ws}/daemon.log`;
+    const daemonLog = target_agent === "derek" ? "/Users/dereknewman/.claude/daemon.log" : `${ws}/daemon.log`;
 
     const tasks = await supabaseQuery("scheduled_tasks", "GET", {
       "agent_name": `eq.${target_agent}`,
@@ -2185,7 +2180,7 @@ server.tool(
       return { content: [{ type: "text", text: e.message }] };
     }
 
-    const args = ["/Users/YOUR_MAC_USERNAME/derek/agent-infra/deploy.sh"];
+    const args = ["/Users/dereknewman/derek/agent-infra/deploy.sh"];
     if (diff_only) args.push("--diff");
 
     try {
@@ -2254,7 +2249,7 @@ server.tool(
 // ==========================================
 // MODULE: Memory (Phase 2.2) — DB-backed agent memories
 // ==========================================
-// Schema lives in /Users/YOUR_MAC_USERNAME/derek/agent-infra/schema/memory_tables.sql.
+// Schema lives in /Users/dereknewman/derek/agent-infra/schema/memory_tables.sql.
 // Writes go through these tools; a projector cron materializes them to
 // ~/<agent>/memory/*.md every 15 min. Agents still Read local files at session
 // start — the DB is the source of truth, files are a read-only cache.
@@ -2287,7 +2282,7 @@ function projectedFileName(type, name, agent) {
 
 function projectedFilePath(agent, type, name) {
   const workspace = agent === "derek" ? "derekPersonal" : agent;
-  return `/Users/YOUR_MAC_USERNAME/${workspace}/memory/${projectedFileName(type, name, agent)}`;
+  return `/Users/dereknewman/${workspace}/memory/${projectedFileName(type, name, agent)}`;
 }
 
 server.tool(
@@ -2480,200 +2475,6 @@ server.tool(
         count: Array.isArray(rows) ? rows.length : 0,
         matches: Array.isArray(rows) ? rows : [],
       }, null, 2) }]
-    };
-  }
-);
-
-// ==========================================
-// MODULE: Skill proposals (Phase 3) — agent-initiated skill creation
-// ==========================================
-// Agents propose new skills (or refinements to existing ones). Proposals land
-// as admin_tasks with action='propose_skill' or 'refine_skill'. Admin picks
-// them up on its poll, validates + security-scans the draft, routes to Farlen
-// for Telegram approval, and on approval writes SKILL.md + skills row +
-// grant_skill. See plan glowing-rolling-plum.md Phase 3 and runbook sections.
-
-const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
-const SECRET_PATTERNS = [
-  { name: "github_pat",          re: /ghp_[A-Za-z0-9]{36}/ },
-  { name: "anthropic_oauth",     re: /sk-ant-[A-Za-z0-9_-]{20,}/ },
-  { name: "openai_project",      re: /sk-proj-[A-Za-z0-9_-]{20,}/ },
-  { name: "notion_integration",  re: /ntn_[A-Za-z0-9_]{40,}/ },
-  { name: "aws_access_key",      re: /AKIA[0-9A-Z]{16}/ },
-  { name: "supabase_pat",        re: /sbp_[a-f0-9]{40}/ },
-  { name: "jwt_looking",         re: /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}/ },
-];
-
-server.tool(
-  "propose_skill",
-  "Propose a new skill for admin review and Farlen approval. Call this after a task with 5+ tool calls, a non-obvious workflow, or a tricky error recovery that's worth capturing as reusable. Admin validates the draft, runs a light security scan, routes to Farlen for Telegram approval, and on approval writes SKILL.md + registers it + grants it to you. Returns a task_id to track status via list_pending_tasks.",
-  {
-    skill_name: z.string().describe("Short slug for the skill. 2-64 chars, lowercase alphanumeric + hyphen (no leading/trailing hyphen). Becomes the file stem at /Users/YOUR_MAC_USERNAME/derek/skills/<slug>/SKILL.md."),
-    draft_skill_md: z.string().describe("Full SKILL.md content: YAML frontmatter (name, description, category, version, author, requires_credentials, example_uses) then markdown body with at least ## Usage Conditions, ## Steps, ## Known Failure Modes, ## Verification sections."),
-    reason: z.string().describe("Why this skill — what repeat pattern, tricky workflow, or error-recovery insight is worth capturing? Farlen reads this when approving."),
-    example_uses: z.array(z.string()).optional().describe("2-3 concrete invocation examples with context (helps discovery + eval harness)."),
-  },
-  async ({ skill_name, draft_skill_md, reason, example_uses }) => {
-    if (!SKILL_NAME_RE.test(skill_name)) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: "Invalid skill_name: must be 2-64 chars, lowercase alphanumeric + hyphen, no leading/trailing hyphen.",
-      }, null, 2) }] };
-    }
-    if (!draft_skill_md.startsWith("---\n")) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: "draft_skill_md must start with '---' followed by a YAML frontmatter block (name, description, type etc.).",
-      }, null, 2) }] };
-    }
-    for (const { name: pname, re } of SECRET_PATTERNS) {
-      if (re.test(draft_skill_md)) {
-        return { content: [{ type: "text", text: JSON.stringify({
-          success: false,
-          error: `Security scan rejected: draft contains a token resembling ${pname}. Reference credentials via get_credential (vault) — never hardcode tokens in skill files.`,
-        }, null, 2) }] };
-      }
-    }
-
-    const existing = await supabaseQuery("skills", "GET", { name: `eq.${skill_name}`, select: "name,origin" });
-    if (Array.isArray(existing) && existing.length > 0) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: `Skill '${skill_name}' already exists (origin=${existing[0].origin}). Use refine_skill to propose changes to it.`,
-      }, null, 2) }] };
-    }
-
-    const taskId = generateTaskId();
-    await supabaseQuery("admin_tasks", "POST", {
-      body: {
-        task_id: taskId,
-        source_agent: AGENT_NAME,
-        target_agent: "admin",
-        action: "propose_skill",
-        params: {
-          skill_name,
-          draft_skill_md,
-          reason,
-          example_uses: example_uses || [],
-        },
-        status: "pending",
-      },
-    });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: true,
-        task_id: taskId,
-        skill_name,
-        status: "pending",
-        message: "Proposal submitted. Admin will pick it up on its next poll, run basic validation, and route to Farlen for Telegram approval. On approval the skill is registered and granted to you automatically — check list_pending_tasks to see when the task completes.",
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "refine_skill",
-  "Propose a refinement (find-and-replace patch) to an existing skill after discovering something worth capturing during use. Patches touching only 'Known Failure Modes', 'Verification', or whitespace may be auto-applied by admin; patches touching 'Steps' or 'Usage Conditions' require Farlen approval.",
-  {
-    skill_name: z.string().describe("Slug of the existing skill to refine."),
-    patch_find: z.string().describe("Text block from the current SKILL.md to replace. Whitespace-tolerant fuzzy match — include 2-3 lines of context if the same short phrase appears multiple times."),
-    patch_replace: z.string().describe("Replacement text. Keep edits surgical; don't rewrite the whole skill."),
-    reason: z.string().describe("Why this refinement — what did you learn while using the skill?"),
-  },
-  async ({ skill_name, patch_find, patch_replace, reason }) => {
-    const skills = await supabaseQuery("skills", "GET", { name: `eq.${skill_name}`, select: "name" });
-    if (!Array.isArray(skills) || skills.length === 0) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: `Skill '${skill_name}' not found in the catalog. Use propose_skill for new skills.`,
-      }, null, 2) }] };
-    }
-
-    // Same secret scan on the replacement — don't let refinement sneak secrets in.
-    for (const { name: pname, re } of SECRET_PATTERNS) {
-      if (re.test(patch_replace)) {
-        return { content: [{ type: "text", text: JSON.stringify({
-          success: false,
-          error: `Security scan rejected: patch_replace contains a token resembling ${pname}. Use get_credential instead.`,
-        }, null, 2) }] };
-      }
-    }
-
-    const taskId = generateTaskId();
-    await supabaseQuery("admin_tasks", "POST", {
-      body: {
-        task_id: taskId,
-        source_agent: AGENT_NAME,
-        target_agent: "admin",
-        action: "refine_skill",
-        params: {
-          skill_name,
-          patch_find,
-          patch_replace,
-          reason,
-        },
-        status: "pending",
-      },
-    });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: true,
-        task_id: taskId,
-        skill_name,
-        status: "pending",
-        message: "Refinement proposed. Admin classifies the patch scope: safe (auto-apply) vs gated (Farlen-approved). Track via list_pending_tasks.",
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "list_skill_proposals",
-  "Admin-only. Returns all pending propose_skill and refine_skill admin_tasks with a short preview of each draft/patch. Feeds the approval queue that admin reviews on every poll.",
-  {},
-  async () => {
-    const ADMIN_AGENTS_S = ["admin", "dereklm"];
-    if (!ADMIN_AGENTS_S.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: list_skill_proposals is admin-only (you are '${AGENT_NAME}').` }] };
-    }
-
-    const rows = await supabaseQuery("admin_tasks", "GET", {
-      "target_agent": "eq.admin",
-      "action": "in.(propose_skill,refine_skill)",
-      "status": "eq.pending",
-      "order": "created_at.desc",
-      "select": "task_id,source_agent,action,params,created_at,expires_at",
-    });
-
-    const proposals = (rows || []).map(t => {
-      const p = t.params || {};
-      const base = {
-        task_id: t.task_id,
-        action: t.action,
-        from: t.source_agent,
-        skill_name: p.skill_name,
-        reason: p.reason,
-        created_at: t.created_at,
-        expires_at: t.expires_at,
-      };
-      if (t.action === "propose_skill") {
-        const draft = (p.draft_skill_md || "");
-        base.draft_preview = draft.split("\n").slice(0, 25).join("\n");
-        base.draft_length = draft.length;
-        base.example_uses = p.example_uses || [];
-      } else if (t.action === "refine_skill") {
-        base.patch_preview = {
-          find: (p.patch_find || "").slice(0, 240),
-          replace: (p.patch_replace || "").slice(0, 240),
-        };
-      }
-      return base;
-    });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({ count: proposals.length, proposals }, null, 2) }]
     };
   }
 );

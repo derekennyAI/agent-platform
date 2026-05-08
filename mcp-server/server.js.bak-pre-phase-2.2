@@ -829,14 +829,9 @@ function saveLocalTasks(tasks) {
 }
 
 async function syncToLocal() {
-  // Pull active tasks from Supabase and write to local JSON for the executor.
-  // CRITICAL: must match scheduler_executor.sh's filter (`active=eq.true`).
-  // Without this, inactive rows (e.g. paused admin_poll) leak into the local
-  // cache and mask legitimate active rows with stale state — the root cause of
-  // the 2026-04-24 admin_poll-not-firing incident.
+  // Pull all tasks from Supabase and write to local JSON for the executor
   try {
     const tasks = await supabaseQuery("scheduled_tasks", "GET", {
-      "active": "eq.true",
       "order": "agent_name,id",
     });
     if (tasks && Array.isArray(tasks)) {
@@ -1853,7 +1848,7 @@ server.tool(
 // inspect fleet health, tail logs, diagnose stuck agents, trigger deploys.
 // All admin-only (derek, dereklm).
 
-const REGISTRY_FILE = "/Users/YOUR_MAC_USERNAME/derek/agent-infra/agents.json";
+const REGISTRY_FILE = "/Users/dereknewman/derek/agent-infra/agents.json";
 const TMUX_BIN = "/opt/homebrew/bin/tmux";
 
 function loadRegistry() {
@@ -1943,10 +1938,10 @@ server.tool(
     const rows = [];
 
     for (const [name, cfg] of Object.entries(agents)) {
-      const ws = cfg.workspace || `/Users/YOUR_MAC_USERNAME/${name}`;
+      const ws = cfg.workspace || `/Users/dereknewman/${name}`;
       const readyFile = `${ws}/.ready`;
       const liabFile = `${ws}/liability_accepted.json`;
-      const daemonLog = name === "derek" ? "/Users/YOUR_MAC_USERNAME/.claude/daemon.log" : `${ws}/daemon.log`;
+      const daemonLog = name === "derek" ? "/Users/dereknewman/.claude/daemon.log" : `${ws}/daemon.log`;
       const credsFile = cfg.config_dir ? `${cfg.config_dir}/.credentials.json` : null;
 
       rows.push({
@@ -2106,8 +2101,8 @@ server.tool(
     if (!cfg) return { content: [{ type: "text", text: `Unknown agent: ${target_agent}` }] };
 
     const n = Math.min(Math.max(lines || 80, 1), 500);
-    const ws = cfg.workspace || `/Users/YOUR_MAC_USERNAME/${target_agent}`;
-    const logFile = target_agent === "derek" ? "/Users/YOUR_MAC_USERNAME/.claude/daemon.log" : `${ws}/daemon.log`;
+    const ws = cfg.workspace || `/Users/dereknewman/${target_agent}`;
+    const logFile = target_agent === "derek" ? "/Users/dereknewman/.claude/daemon.log" : `${ws}/daemon.log`;
     const content = tailFile(logFile, n);
 
     return {
@@ -2133,9 +2128,9 @@ server.tool(
     const cfg = reg[target_agent];
     if (!cfg) return { content: [{ type: "text", text: `Unknown agent: ${target_agent}` }] };
 
-    const ws = cfg.workspace || `/Users/YOUR_MAC_USERNAME/${target_agent}`;
+    const ws = cfg.workspace || `/Users/dereknewman/${target_agent}`;
     const session = cfg.tmux_session || `${target_agent}-agent`;
-    const daemonLog = target_agent === "derek" ? "/Users/YOUR_MAC_USERNAME/.claude/daemon.log" : `${ws}/daemon.log`;
+    const daemonLog = target_agent === "derek" ? "/Users/dereknewman/.claude/daemon.log" : `${ws}/daemon.log`;
 
     const tasks = await supabaseQuery("scheduled_tasks", "GET", {
       "agent_name": `eq.${target_agent}`,
@@ -2185,7 +2180,7 @@ server.tool(
       return { content: [{ type: "text", text: e.message }] };
     }
 
-    const args = ["/Users/YOUR_MAC_USERNAME/derek/agent-infra/deploy.sh"];
+    const args = ["/Users/dereknewman/derek/agent-infra/deploy.sh"];
     if (diff_only) args.push("--diff");
 
     try {
@@ -2247,433 +2242,6 @@ server.tool(
       content: [{ type: "text", text: JSON.stringify({
         success: true, action, broadcast_count: results.length, tasks: results,
       }, null, 2) }]
-    };
-  }
-);
-
-// ==========================================
-// MODULE: Memory (Phase 2.2) — DB-backed agent memories
-// ==========================================
-// Schema lives in /Users/YOUR_MAC_USERNAME/derek/agent-infra/schema/memory_tables.sql.
-// Writes go through these tools; a projector cron materializes them to
-// ~/<agent>/memory/*.md every 15 min. Agents still Read local files at session
-// start — the DB is the source of truth, files are a read-only cache.
-
-const MEMORY_TYPES = ["soul", "user", "feedback", "project", "reference", "failed", "session"];
-const ADMIN_AGENTS_MEM = ["admin", "dereklm"];
-
-function slugify(s) {
-  // Underscore convention: matches the existing ~/<agent>/memory/ filename
-  // scheme (feedback_pill_confirmation.md, user_contacts_nicknames.md, etc.).
-  // Keep this in sync with project_memories_to_files.py:slugify.
-  return String(s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 80);
-}
-
-function memoryId(agent, type, name) {
-  return `${agent}/${type}/${slugify(name)}`;
-}
-
-function projectedFileName(type, name, agent) {
-  // Soul uses `<slug(name)>_soul.md` — the persona slug, not the agent key.
-  // This keeps CLAUDE.md paths like memory/derek_soul.md or memory/overseer_soul.md
-  // stable even when the persona name differs from the registry agent key.
-  if (type === "soul") return `${slugify(name)}_soul.md`;
-  return `${type}_${slugify(name)}.md`;
-}
-
-function projectedFilePath(agent, type, name) {
-  const workspace = agent === "derek" ? "derekPersonal" : agent;
-  return `/Users/YOUR_MAC_USERNAME/${workspace}/memory/${projectedFileName(type, name, agent)}`;
-}
-
-server.tool(
-  "store_memory",
-  "Store or update a durable memory in the fleet's agent_memories table. Agents store their own by default; admin agents (admin, dereklm) can pass 'agent' to write for others. References require a 'source' URL/path (DB-enforced). The file projection at ~/<agent>/memory/ appears within 15 min via the projector cron.",
-  {
-    type: z.enum(MEMORY_TYPES).describe("Memory type: soul, user, feedback, project, reference, failed, session"),
-    name: z.string().describe("Short identifier (1-200 chars). Used in the slug; stable across updates."),
-    description: z.string().describe("One-line description used for memory-index rendering and relevance matching (1-500 chars)."),
-    content: z.string().describe("Full memory body, markdown allowed."),
-    source: z.string().optional().describe("URL or file path. REQUIRED for type='reference' — DB rejects reference rows without it."),
-    tags: z.array(z.string()).optional().describe("Optional tags for grouping / filtering."),
-    agent: z.string().optional().describe("Target agent (admin only — omit to store for yourself)."),
-  },
-  async ({ type, name, description, content, source, tags, agent }) => {
-    if (agent && !ADMIN_AGENTS_MEM.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: only admin agents can store memories for other agents.` }] };
-    }
-    const targetAgent = agent && ADMIN_AGENTS_MEM.includes(AGENT_NAME) ? agent : AGENT_NAME;
-    const id = memoryId(targetAgent, type, name);
-
-    const body = {
-      id,
-      agent_name: targetAgent,
-      type,
-      name,
-      description,
-      content,
-      source: source ?? null,
-      tags: tags ?? [],
-      origin_session_id: process.env.CLAUDE_SESSION_ID ?? null,
-    };
-
-    const result = await supabaseQuery("agent_memories", "POST", { body, onConflict: "id" });
-
-    if (Array.isArray(result)) {
-      return {
-        content: [{ type: "text", text: JSON.stringify({
-          success: true, id, agent: targetAgent, type, name,
-          projected_file: projectedFilePath(targetAgent, type, name),
-          message: "Memory stored. File will be projected to ~/<agent>/memory/ within 15 min.",
-        }, null, 2) }]
-      };
-    }
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: false, id, agent: targetAgent, type, name,
-        error: result.message || result, hint: result.hint || null,
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "get_memory",
-  "Fetch a single memory by id or by (type, name). Agents get their own by default; admin agents can pass 'agent' to read another agent's.",
-  {
-    id: z.string().optional().describe("Full slug (e.g. 'admin/feedback/no-verbose-summaries'). If given, takes precedence."),
-    type: z.enum(MEMORY_TYPES).optional().describe("Memory type (used with 'name' if 'id' not provided)."),
-    name: z.string().optional().describe("Memory name (used with 'type' if 'id' not provided)."),
-    agent: z.string().optional().describe("Target agent (admin only — omit to fetch your own)."),
-  },
-  async ({ id, type, name, agent }) => {
-    if (agent && !ADMIN_AGENTS_MEM.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: only admin agents can read other agents' memories.` }] };
-    }
-    const targetAgent = agent && ADMIN_AGENTS_MEM.includes(AGENT_NAME) ? agent : AGENT_NAME;
-
-    const params = { select: "*" };
-    if (id) {
-      params.id = `eq.${id}`;
-    } else if (type && name) {
-      params.agent_name = `eq.${targetAgent}`;
-      params.type = `eq.${type}`;
-      params.name = `eq.${name}`;
-    } else {
-      return { content: [{ type: "text", text: JSON.stringify({ found: false, error: "Provide either 'id' or both 'type' and 'name'." }, null, 2) }] };
-    }
-
-    const rows = await supabaseQuery("agent_memories", "GET", params);
-    if (!Array.isArray(rows) || rows.length === 0) {
-      return { content: [{ type: "text", text: JSON.stringify({ found: false, agent: targetAgent, id, type, name }, null, 2) }] };
-    }
-    return { content: [{ type: "text", text: JSON.stringify({ found: true, memory: rows[0] }, null, 2) }] };
-  }
-);
-
-server.tool(
-  "list_memories",
-  "List memories for an agent, optionally filtered by type or tags. Superseded memories are hidden by default.",
-  {
-    type: z.enum(MEMORY_TYPES).optional().describe("Filter by memory type."),
-    tags: z.array(z.string()).optional().describe("Filter by tags (memories containing ALL listed tags)."),
-    include_superseded: z.boolean().optional().describe("Default false — superseded memories are hidden."),
-    agent: z.string().optional().describe("Target agent (admin only — omit to list your own)."),
-  },
-  async ({ type, tags, include_superseded, agent }) => {
-    if (agent && !ADMIN_AGENTS_MEM.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: only admin agents can list other agents' memories.` }] };
-    }
-    const targetAgent = agent && ADMIN_AGENTS_MEM.includes(AGENT_NAME) ? agent : AGENT_NAME;
-
-    const params = {
-      agent_name: `eq.${targetAgent}`,
-      select: "id,type,name,description,source,tags,superseded_by,created_at,updated_at,verified_at",
-      order: "type,name",
-    };
-    if (type) params.type = `eq.${type}`;
-    if (tags && tags.length) params.tags = `cs.{${tags.map(t => `"${t.replace(/"/g, "")}"`).join(",")}}`;
-    if (!include_superseded) params.superseded_by = "is.null";
-
-    const rows = await supabaseQuery("agent_memories", "GET", params);
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        agent: targetAgent,
-        count: Array.isArray(rows) ? rows.length : 0,
-        memories: Array.isArray(rows) ? rows : [],
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "supersede_memory",
-  "Mark an old memory as superseded by a newer one. Sets old.superseded_by = new_id atomically. The projector cron will drop the old file on its next run.",
-  {
-    old_id: z.string().describe("Full slug of the memory being replaced."),
-    new_id: z.string().describe("Full slug of the replacement memory (must already exist — call store_memory first)."),
-    reason: z.string().optional().describe("Optional short note appended to the old memory's description."),
-  },
-  async ({ old_id, new_id, reason }) => {
-    const existing = await supabaseQuery("agent_memories", "GET", { id: `eq.${new_id}`, select: "id" });
-    if (!Array.isArray(existing) || existing.length === 0) {
-      return { content: [{ type: "text", text: JSON.stringify({ success: false, error: `new_id ${new_id} does not exist — store_memory first.` }, null, 2) }] };
-    }
-
-    const patchBody = { superseded_by: new_id };
-    if (reason) {
-      const oldRow = await supabaseQuery("agent_memories", "GET", { id: `eq.${old_id}`, select: "description" });
-      if (Array.isArray(oldRow) && oldRow.length) {
-        patchBody.description = `${oldRow[0].description} [superseded: ${reason}]`.slice(0, 500);
-      }
-    }
-    const status = await supabaseQuery("agent_memories", "PATCH", {
-      filters: { id: `eq.${old_id}` },
-      body: patchBody,
-    });
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: status >= 200 && status < 300,
-        old_id, new_id, http_status: status,
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "search_memories",
-  "Search memories by substring across name, description, and content. Agent-scoped by default; admin agents can pass agent='*' to search the whole fleet.",
-  {
-    query: z.string().describe("Substring to search for (case-insensitive)."),
-    type: z.enum(MEMORY_TYPES).optional().describe("Optional: restrict to one memory type."),
-    agent: z.string().optional().describe("Target agent, or '*' for fleet-wide (admin only). Omit for your own."),
-    limit: z.number().optional().describe("Max results (default 20)."),
-  },
-  async ({ query, type, agent, limit }) => {
-    const wantFleet = agent === "*";
-    if ((agent && agent !== "*") && !ADMIN_AGENTS_MEM.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: only admin agents can search other agents' memories.` }] };
-    }
-    if (wantFleet && !ADMIN_AGENTS_MEM.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: only admin agents can search fleet-wide.` }] };
-    }
-
-    const esc = query.replace(/[,()]/g, " ").replace(/\s+/g, "%");
-    const params = {
-      or: `(name.ilike.*${esc}*,description.ilike.*${esc}*,content.ilike.*${esc}*)`,
-      select: "id,agent_name,type,name,description,tags,updated_at",
-      superseded_by: "is.null",
-      order: "updated_at.desc",
-      limit: String(limit || 20),
-    };
-    if (!wantFleet) params.agent_name = `eq.${agent || AGENT_NAME}`;
-    if (type) params.type = `eq.${type}`;
-
-    const rows = await supabaseQuery("agent_memories", "GET", params);
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        query, scope: wantFleet ? "fleet" : (agent || AGENT_NAME),
-        count: Array.isArray(rows) ? rows.length : 0,
-        matches: Array.isArray(rows) ? rows : [],
-      }, null, 2) }]
-    };
-  }
-);
-
-// ==========================================
-// MODULE: Skill proposals (Phase 3) — agent-initiated skill creation
-// ==========================================
-// Agents propose new skills (or refinements to existing ones). Proposals land
-// as admin_tasks with action='propose_skill' or 'refine_skill'. Admin picks
-// them up on its poll, validates + security-scans the draft, routes to Farlen
-// for Telegram approval, and on approval writes SKILL.md + skills row +
-// grant_skill. See plan glowing-rolling-plum.md Phase 3 and runbook sections.
-
-const SKILL_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
-const SECRET_PATTERNS = [
-  { name: "github_pat",          re: /ghp_[A-Za-z0-9]{36}/ },
-  { name: "anthropic_oauth",     re: /sk-ant-[A-Za-z0-9_-]{20,}/ },
-  { name: "openai_project",      re: /sk-proj-[A-Za-z0-9_-]{20,}/ },
-  { name: "notion_integration",  re: /ntn_[A-Za-z0-9_]{40,}/ },
-  { name: "aws_access_key",      re: /AKIA[0-9A-Z]{16}/ },
-  { name: "supabase_pat",        re: /sbp_[a-f0-9]{40}/ },
-  { name: "jwt_looking",         re: /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}/ },
-];
-
-server.tool(
-  "propose_skill",
-  "Propose a new skill for admin review and Farlen approval. Call this after a task with 5+ tool calls, a non-obvious workflow, or a tricky error recovery that's worth capturing as reusable. Admin validates the draft, runs a light security scan, routes to Farlen for Telegram approval, and on approval writes SKILL.md + registers it + grants it to you. Returns a task_id to track status via list_pending_tasks.",
-  {
-    skill_name: z.string().describe("Short slug for the skill. 2-64 chars, lowercase alphanumeric + hyphen (no leading/trailing hyphen). Becomes the file stem at /Users/YOUR_MAC_USERNAME/derek/skills/<slug>/SKILL.md."),
-    draft_skill_md: z.string().describe("Full SKILL.md content: YAML frontmatter (name, description, category, version, author, requires_credentials, example_uses) then markdown body with at least ## Usage Conditions, ## Steps, ## Known Failure Modes, ## Verification sections."),
-    reason: z.string().describe("Why this skill — what repeat pattern, tricky workflow, or error-recovery insight is worth capturing? Farlen reads this when approving."),
-    example_uses: z.array(z.string()).optional().describe("2-3 concrete invocation examples with context (helps discovery + eval harness)."),
-  },
-  async ({ skill_name, draft_skill_md, reason, example_uses }) => {
-    if (!SKILL_NAME_RE.test(skill_name)) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: "Invalid skill_name: must be 2-64 chars, lowercase alphanumeric + hyphen, no leading/trailing hyphen.",
-      }, null, 2) }] };
-    }
-    if (!draft_skill_md.startsWith("---\n")) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: "draft_skill_md must start with '---' followed by a YAML frontmatter block (name, description, type etc.).",
-      }, null, 2) }] };
-    }
-    for (const { name: pname, re } of SECRET_PATTERNS) {
-      if (re.test(draft_skill_md)) {
-        return { content: [{ type: "text", text: JSON.stringify({
-          success: false,
-          error: `Security scan rejected: draft contains a token resembling ${pname}. Reference credentials via get_credential (vault) — never hardcode tokens in skill files.`,
-        }, null, 2) }] };
-      }
-    }
-
-    const existing = await supabaseQuery("skills", "GET", { name: `eq.${skill_name}`, select: "name,origin" });
-    if (Array.isArray(existing) && existing.length > 0) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: `Skill '${skill_name}' already exists (origin=${existing[0].origin}). Use refine_skill to propose changes to it.`,
-      }, null, 2) }] };
-    }
-
-    const taskId = generateTaskId();
-    await supabaseQuery("admin_tasks", "POST", {
-      body: {
-        task_id: taskId,
-        source_agent: AGENT_NAME,
-        target_agent: "admin",
-        action: "propose_skill",
-        params: {
-          skill_name,
-          draft_skill_md,
-          reason,
-          example_uses: example_uses || [],
-        },
-        status: "pending",
-      },
-    });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: true,
-        task_id: taskId,
-        skill_name,
-        status: "pending",
-        message: "Proposal submitted. Admin will pick it up on its next poll, run basic validation, and route to Farlen for Telegram approval. On approval the skill is registered and granted to you automatically — check list_pending_tasks to see when the task completes.",
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "refine_skill",
-  "Propose a refinement (find-and-replace patch) to an existing skill after discovering something worth capturing during use. Patches touching only 'Known Failure Modes', 'Verification', or whitespace may be auto-applied by admin; patches touching 'Steps' or 'Usage Conditions' require Farlen approval.",
-  {
-    skill_name: z.string().describe("Slug of the existing skill to refine."),
-    patch_find: z.string().describe("Text block from the current SKILL.md to replace. Whitespace-tolerant fuzzy match — include 2-3 lines of context if the same short phrase appears multiple times."),
-    patch_replace: z.string().describe("Replacement text. Keep edits surgical; don't rewrite the whole skill."),
-    reason: z.string().describe("Why this refinement — what did you learn while using the skill?"),
-  },
-  async ({ skill_name, patch_find, patch_replace, reason }) => {
-    const skills = await supabaseQuery("skills", "GET", { name: `eq.${skill_name}`, select: "name" });
-    if (!Array.isArray(skills) || skills.length === 0) {
-      return { content: [{ type: "text", text: JSON.stringify({
-        success: false,
-        error: `Skill '${skill_name}' not found in the catalog. Use propose_skill for new skills.`,
-      }, null, 2) }] };
-    }
-
-    // Same secret scan on the replacement — don't let refinement sneak secrets in.
-    for (const { name: pname, re } of SECRET_PATTERNS) {
-      if (re.test(patch_replace)) {
-        return { content: [{ type: "text", text: JSON.stringify({
-          success: false,
-          error: `Security scan rejected: patch_replace contains a token resembling ${pname}. Use get_credential instead.`,
-        }, null, 2) }] };
-      }
-    }
-
-    const taskId = generateTaskId();
-    await supabaseQuery("admin_tasks", "POST", {
-      body: {
-        task_id: taskId,
-        source_agent: AGENT_NAME,
-        target_agent: "admin",
-        action: "refine_skill",
-        params: {
-          skill_name,
-          patch_find,
-          patch_replace,
-          reason,
-        },
-        status: "pending",
-      },
-    });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({
-        success: true,
-        task_id: taskId,
-        skill_name,
-        status: "pending",
-        message: "Refinement proposed. Admin classifies the patch scope: safe (auto-apply) vs gated (Farlen-approved). Track via list_pending_tasks.",
-      }, null, 2) }]
-    };
-  }
-);
-
-server.tool(
-  "list_skill_proposals",
-  "Admin-only. Returns all pending propose_skill and refine_skill admin_tasks with a short preview of each draft/patch. Feeds the approval queue that admin reviews on every poll.",
-  {},
-  async () => {
-    const ADMIN_AGENTS_S = ["admin", "dereklm"];
-    if (!ADMIN_AGENTS_S.includes(AGENT_NAME)) {
-      return { content: [{ type: "text", text: `Denied: list_skill_proposals is admin-only (you are '${AGENT_NAME}').` }] };
-    }
-
-    const rows = await supabaseQuery("admin_tasks", "GET", {
-      "target_agent": "eq.admin",
-      "action": "in.(propose_skill,refine_skill)",
-      "status": "eq.pending",
-      "order": "created_at.desc",
-      "select": "task_id,source_agent,action,params,created_at,expires_at",
-    });
-
-    const proposals = (rows || []).map(t => {
-      const p = t.params || {};
-      const base = {
-        task_id: t.task_id,
-        action: t.action,
-        from: t.source_agent,
-        skill_name: p.skill_name,
-        reason: p.reason,
-        created_at: t.created_at,
-        expires_at: t.expires_at,
-      };
-      if (t.action === "propose_skill") {
-        const draft = (p.draft_skill_md || "");
-        base.draft_preview = draft.split("\n").slice(0, 25).join("\n");
-        base.draft_length = draft.length;
-        base.example_uses = p.example_uses || [];
-      } else if (t.action === "refine_skill") {
-        base.patch_preview = {
-          find: (p.patch_find || "").slice(0, 240),
-          replace: (p.patch_replace || "").slice(0, 240),
-        };
-      }
-      return base;
-    });
-
-    return {
-      content: [{ type: "text", text: JSON.stringify({ count: proposals.length, proposals }, null, 2) }]
     };
   }
 );

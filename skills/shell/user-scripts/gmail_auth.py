@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Shared Gmail OAuth token management. Reads from credential vault, auto-refreshes."""
+"""Shared Gmail OAuth token management. Reads from credential vault, auto-refreshes.
+
+On-disk tokens delegate to ~/derek/skills/_lib/google_auth.py for refresh-at-use
+semantics (concurrency-safe, atomic write, persists `expires_at`). The vault
+fallback path stays as legacy for the rare case where an agent has a vault
+token but no disk file.
+"""
 import json
 import os
 import sys
@@ -9,12 +15,16 @@ import urllib.parse
 from pathlib import Path
 
 # Vault integration
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "mcp-server"))
+sys.path.insert(0, "/Users/YOUR_MAC_USERNAME/derek/skills/admin-mcp")
 from vault_client import get_credential
+
+# Refresh-at-use helper
+sys.path.insert(0, "/Users/YOUR_MAC_USERNAME/derek/skills/_lib")
+from google_auth import get_token as _disk_get_token, GoogleAuthError
 
 # Agent identity — determines whose credentials are loaded
 _AGENT_NAME = os.environ.get("AGENT_NAME", "derek")
-_WORKSPACE = Path.home() / _AGENT_NAME
+_WORKSPACE = Path(f"/Users/YOUR_MAC_USERNAME/{_AGENT_NAME}")
 _CONFIG_DIR = _WORKSPACE / ".config" / _AGENT_NAME
 _ACCOUNTS_DIR = _CONFIG_DIR / "accounts"
 
@@ -77,7 +87,7 @@ def _save_token(token_data, source):
     try:
         from vault_client import get_credential as _gc
         # Store updated token in vault via direct Supabase call
-        SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+        SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
         svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
         if svc_key:
             data = json.dumps({
@@ -110,7 +120,40 @@ def _save_token(token_data, source):
 
 
 def get_access_token(max_retries=3):
-    """Get a valid access token, auto-refreshing if needed."""
+    """Get a valid access token, auto-refreshing if needed.
+
+    Disk path delegates to google_auth.get_token() — that helper handles
+    expiry checks, refresh, atomic write, concurrency lock. After a successful
+    disk refresh, we mirror the new token into the vault for cross-process
+    visibility (backwards-compat with downstream consumers that read the
+    vault directly).
+
+    If no disk file exists, falls back to legacy vault-only refresh path.
+    """
+    # Common path: token file on disk → new helper.
+    # Only mirror to vault when the helper actually refreshed (i.e. the
+    # access_token on disk changed). The vault write is a Supabase POST;
+    # doing it on every call adds 200–500ms of network latency per Gmail
+    # API request even when the cached token was reused.
+    if _TOKEN_PATH and _TOKEN_PATH.exists():
+        try:
+            try:
+                pre_refresh_token = json.loads(_TOKEN_PATH.read_text()).get("access_token")
+            except Exception:
+                pre_refresh_token = None
+            access = _disk_get_token(_TOKEN_PATH)
+            if access != pre_refresh_token:
+                try:
+                    latest = json.loads(_TOKEN_PATH.read_text())
+                    _save_token(latest, "disk")
+                except Exception:
+                    pass
+            return access
+        except GoogleAuthError:
+            # Fall through to legacy vault-only path on any helper failure.
+            pass
+
+    # Legacy path: vault-only token (rare; no disk file present)
     token, source = _load_token()
 
     expires_at = token.get("expires_at", 0)

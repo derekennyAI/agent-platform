@@ -26,14 +26,22 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
-import sys as _sys; _sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "mcp-server"))
+import sys as _sys; _sys.path.insert(0, "/Users/YOUR_MAC_USERNAME/derek/skills/admin-mcp")
 from vault_client import get_credential as _vault_get, get_credentials as _vault_get_all
 
 # Agent identity — determines whose credentials are loaded
 _AGENT_NAME = os.environ.get("AGENT_NAME", "derek")
 
 # Resolve workspace and config paths dynamically per agent
-_WORKSPACE = Path.home() / _AGENT_NAME
+_AGENT_WORKSPACES = {
+    "derek": Path("/Users/YOUR_MAC_USERNAME/derek"),
+    "vera": Path("/Users/YOUR_MAC_USERNAME/vera"),
+    "nate": Path("/Users/YOUR_MAC_USERNAME/nate"),
+    "blake": Path("/Users/YOUR_MAC_USERNAME/blake"),
+    "julie": Path("/Users/YOUR_MAC_USERNAME/julie"),
+    "macgyver": Path("/Users/YOUR_MAC_USERNAME/macgyver"),
+}
+_WORKSPACE = _AGENT_WORKSPACES.get(_AGENT_NAME, Path(f"/Users/YOUR_MAC_USERNAME/{_AGENT_NAME}"))
 _CONFIG_DIR = _WORKSPACE / ".config" / _AGENT_NAME
 _ACCOUNTS_DIR = _CONFIG_DIR / "accounts"
 
@@ -51,10 +59,10 @@ def _build_account_dirs():
         for d in _ACCOUNTS_DIR.iterdir():
             if d.is_dir() and (d / "google-token.json").exists():
                 # Convert dir name back to a short alias
-                name = d.name  # e.g. "user_at_example_com"
+                name = d.name  # e.g. "derek_at_enny_ai"
                 # Create short aliases from the directory name
                 email = name.replace("_at_", "@").replace("_", ".")
-                short = email.split("@")[0]  # e.g. "user", "admin"
+                short = email.split("@")[0]  # e.g. "derek", "fmischel"
                 dirs[short] = d
                 dirs[name] = d  # also allow full dir name
     return dirs
@@ -138,17 +146,19 @@ _auth = {"token": None, "token_path": None, "creds_path": None}
 
 
 def refresh_token(creds, token_data):
-    client = creds.get("installed", creds)
-    data = urllib.parse.urlencode({
-        "client_id": client["client_id"],
-        "client_secret": client["client_secret"],
-        "refresh_token": token_data["refresh_token"],
-        "grant_type": "refresh_token",
-    }).encode()
-    req = urllib.request.Request(TOKEN_URI, data=data)
-    with urllib.request.urlopen(req) as resp:
-        new_token = json.loads(resp.read().decode())
-    new_token["refresh_token"] = token_data["refresh_token"]
+    """Force-refresh via the shared helper (atomic write, flock-safe).
+
+    Signature kept stable for back-compat. `creds` is ignored — google_auth
+    resolves credentials as a sibling of the token file. Returns a token dict
+    matching the legacy shape (with refresh_token preserved).
+    """
+    import sys as _sys
+    _sys.path.insert(0, "/Users/YOUR_MAC_USERNAME/derek/skills/_lib")
+    from google_auth import get_token as _gauth_get_token
+    token_path = _auth.get("token_path") or _resolve_account_dir() / "google-token.json"
+    _gauth_get_token(token_path, force_refresh=True)
+    with open(token_path) as f:
+        new_token = json.load(f)
     return new_token
 
 
@@ -189,7 +199,7 @@ def _save_refreshed_token(new_token):
         from vault_client import get_credential  # re-import to avoid circular
         # Use the Supabase REST API directly for upsert
         import urllib.request as _ur
-        VAULT_URL = os.environ.get("SUPABASE_URL", "")
+        VAULT_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
         VAULT_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
         if VAULT_KEY and new_token.get("access_token"):
             for k, v in [(access_key, new_token["access_token"]), (refresh_key, new_token.get("refresh_token", ""))]:

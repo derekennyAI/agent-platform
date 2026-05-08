@@ -23,12 +23,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-# Google OAuth app credentials — create your own at console.cloud.google.com
-# See docs/connecting-services.md for setup instructions
-CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "YOUR_CLIENT_ID")
-CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
+# Google OAuth app credentials (enny.ai "derek-agent" project)
+CLIENT_ID = "975899325505-24kqu935trcmrmbjc5mp4ok3dbh8vjr8.apps.googleusercontent.com"
+CLIENT_SECRET = "YOUR_GOOGLE_CLIENT_SECRET"
 REDIRECT_URI_LOCAL = "http://localhost"
-REDIRECT_URI_FUNNEL = os.environ.get("OAUTH_CALLBACK_URL", "http://localhost:8283/oauth/callback")
+REDIRECT_URI_FUNNEL = "https://dereks-macbook-pro.tailf80e44.ts.net/oauth/callback"
 REDIRECT_URI = REDIRECT_URI_FUNNEL  # Default to Funnel for better UX
 SCOPES = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar"
 
