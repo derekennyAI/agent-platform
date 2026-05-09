@@ -377,7 +377,7 @@ server.tool(
   {
     service: z.string().describe("Service name (e.g. 'gmail', 'notion', 'microsoft_mail', 'google_drive')"),
     credentials: z.string().describe("JSON object of credential key-value pairs to store (e.g. {\"access_token\": \"...\", \"refresh_token\": \"...\", \"client_id\": \"...\"})"),
-    metadata: z.string().optional().describe("JSON metadata (e.g. {\"email\": \"vera@leanmarketing.com\", \"expires_at\": \"...\"})"),
+    metadata: z.string().optional().describe("JSON metadata (e.g. {\"email\": \"user@example.com\", \"expires_at\": \"...\"})"),
     agent: z.string().optional().describe("Target agent (admin only — omit to connect for yourself)"),
     skill_description: z.string().optional().describe("Custom user-facing description for this skill (overrides default)"),
   },
