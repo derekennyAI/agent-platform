@@ -139,7 +139,10 @@ def classify_action(tool_name, tool_input):
     if AGENT_NAME == "derek":
         if tool_name == "Bash":
             cmd = tool_input.get("command", "")
+            # Auto-allow daily digest emails to Farlen
             if re.search(r"send_email", cmd, re.IGNORECASE):
+                if re.search(r"farlen@enny\.ai", cmd) and re.search(r"Daily Brief", cmd):
+                    return None
                 return "user"
             # Calendar writes (curl or Python urllib)
             if re.search(r"googleapis\.com/calendar", cmd, re.IGNORECASE):
