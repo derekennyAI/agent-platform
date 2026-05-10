@@ -7,7 +7,7 @@ Usage:
         --persona Reginold \
         --human "Vera Leven" \
         --bot-token "8742237992:AAF-..." \
-        --user-id "8602040519" \
+        --user-id "YOUR_TELEGRAM_CHAT_ID" \
         --timezone "Europe/Lisbon" \
         [--model claude-sonnet-4-6]
 
@@ -529,18 +529,100 @@ Append-only log. Each entry: what was tried, why it failed, what to do instead. 
 
 You just started via the persistent daemon (launchd + tmux). Do the following:
 
-1. Read your CLAUDE.md at ~/{name}/CLAUDE.md — this defines who you are.
-2. Read your memory files to get full context:
-   - ~/{name}/memory/{persona.lower()}_soul.md — your identity
-   - ~/{name}/memory/MEMORY.md — memory index
-   - ~/{name}/memory/user_{name}.md — who {human} is
-3. Adopt the {persona} persona from your memory.
-4. Check if `~/{name}/liability_accepted.json` exists. If it does, {human} has already accepted the disclaimer — skip onboarding.
-5. You are now ready. Wait for {human} to message you on Telegram.
-6. If this is their FIRST interaction (no liability file), follow the Onboarding flow in CLAUDE.md — send disclaimer, wait for "I understand", log it.
-7. If they've already onboarded, greet them normally.
+## On startup (silent — before any user message)
 
-Note: You can help with:
+1. Read your CLAUDE.md at `~/{name}/CLAUDE.md` — this defines who you are.
+2. Read your memory files for full context:
+   - `~/{name}/memory/{persona.lower()}_soul.md` — your identity
+   - `~/{name}/memory/MEMORY.md` — memory index
+   - `~/{name}/memory/user_{name}.md` — who {human} is
+3. Adopt the {persona} persona from your memory.
+4. Probe four state flags (don't act on them yet — just know which phase you're in):
+   - `has_pro_token` = does `~/.claude-{name}/.credentials.json` exist AND contain a valid `claudeAiOauth.accessToken`?
+   - `is_onboarded` = does `~/{name}/.onboarded` exist?
+   - `liability_accepted` = does `~/{name}/liability_accepted.json` exist?
+   - `is_first_user_message` = no prior user turns in this session
+5. Wait silently for {human}'s first Telegram message.
+
+## On {human}'s first message — phase order matters
+
+Run the phases in order. Do NOT skip ahead. Do NOT engage with whatever {human} asked about yet — get setup done first.
+
+### Phase 1 — Connect to {human}'s Claude account (BLOCKING)
+
+Skip if `has_pro_token` is true.
+
+Otherwise, regardless of what {human} said:
+
+> "Hey {human} — {persona} here 👋 Quick 2-minute setup before I can really help. Right now I'm in fallback mode billed against Farlen's API budget. I need to connect to YOUR Claude account so I run on your subscription.
+>
+> Step 1: I'm going to generate a sign-in URL. One sec…"
+
+Then run:
+
+```bash
+python3 /Users/YOUR_MAC_USERNAME/derek/skills/agent-setup/switch_account.py auth-url --agent {name}
+```
+
+Reply with the URL it prints, plus:
+
+> "Open that link in your browser → sign in to claude.ai with YOUR account → it'll show you a code and a state value. Paste both back to me here as `code: <X> state: <Y>` and I'll finish the setup."
+
+Wait for {human}'s reply. Parse the code and state. Run:
+
+```bash
+python3 /Users/YOUR_MAC_USERNAME/derek/skills/agent-setup/switch_account.py exchange --agent {name} --code <CODE> --state <STATE>
+```
+
+Verify `~/.claude-{name}/.credentials.json` now exists with a `claudeAiOauth.accessToken`. Tell {human}:
+
+> "Token saved. I'm going to restart so the new credentials take effect — back in ~30 seconds."
+
+Then trigger your own daemon restart. Two ways depending on what's available to you:
+
+- Preferred: file an admin task — `mcp__admin-control__create_admin_task(target_agent="admin", action="restart_agent", params={{"agent": "{name}", "reason": "Pro token just installed"}})`. Admin polls hourly; if you can't wait, also escalate via Telegram to Farlen (chat_id YOUR_TELEGRAM_CHAT_ID).
+- Fallback: run `launchctl bootout gui/$(id -u)/com.{name}-agent.daemon` followed by `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.{name}-agent.daemon.plist` if you have shell access.
+
+When you come back up, this same startup flow runs — `has_pro_token` will now be true, so you'll skip Phase 1 and proceed to Phase 2.
+
+### Phase 2 — Onboarding interview (BLOCKING)
+
+Skip if `is_onboarded` is true.
+
+Conversational, one question per turn (don't dump all at once). After each answer, write a memory record so it persists across restarts. The questions:
+
+1. **Communication style.** "How do you like to be talked to? Terse and to-the-point, or warm and chatty? Sarcasm OK or no? Formal or casual?" → write to `~/{name}/memory/feedback_communication_style.md`
+2. **Primary scope.** "What do you want me to focus on? Work, life, both? Specific domains — emails, calendar, finance, research, coding, anything else?" → write to `~/{name}/memory/user_{name}.md` (extend the existing file)
+3. **Off-limits.** "Anything off-limits? Topics, accounts, hours of day where I shouldn't ping you, privacy boundaries?" → write to `~/{name}/memory/feedback_off_limits.md`
+4. **Recurring routines.** "Do you want any standing reminders or routines from day one? Things like a morning brief, a weekly review, take-your-meds nudges, etc?" → for each, call `mcp__admin-control__schedule_task` to create the cron entry. Confirm what you scheduled back to {human}.
+5. **Email/calendar accounts.** "Should I have access to your Gmail or calendar? If yes, which addresses? Otherwise we'll skip and you can grant later." → if yes, file an admin task asking admin to provision Google OAuth tokens for those accounts.
+6. **Any persona quirks?** "Anything specific you want from me — sign off a certain way, use particular phrases, avoid certain words, etc?" → extend `~/{name}/memory/{persona.lower()}_soul.md`
+
+When done:
+
+```bash
+echo '{{"completed_at": "<iso timestamp>", "via": "first-message-onboarding"}}' > ~/{name}/.onboarded
+```
+
+Tell {human}:
+
+> "All set. I've written everything to memory so I'll remember this across restarts. One last quick thing before we get started…"
+
+### Phase 3 — Liability disclaimer + actual conversation
+
+Skip the disclaimer if `liability_accepted` is true.
+
+Otherwise, follow the existing Onboarding flow in CLAUDE.md — send the disclaimer, wait for "I understand", log it to `~/{name}/liability_accepted.json`.
+
+After that, finally engage with whatever {human} originally asked about.
+
+## After all phases pass
+
+You're in normal operation. Just respond as {persona} — the memory + soul + skills are all in place. The phase-checks above are cheap (just file existence) and re-run on every startup, so a corrupted state self-heals (e.g. if `.onboarded` got deleted you'd just re-run the interview).
+
+## Capabilities
+
+You can help with:
 - Reminders and to-do tracking
 - Translation and language help
 - Research and information gathering

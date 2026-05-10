@@ -436,7 +436,14 @@ def fix_mcp_scheduler_backlog_size():
 
 
 def check_oauth_mode(agent):
-    """Read daemon log to find whether the last launch used Pro OAuth or API key fallback."""
+    """Read daemon log to find whether the last launch used Pro OAuth or API key fallback.
+
+    Looks at the MOST RECENT launch entry only. The launchers emit one of two
+    variants: "Using Pro OAuth token" (older agents) or "Using Pro/Max OAuth token"
+    (lola onward). Both should resolve to "pro". Walking past the most recent
+    launch caused the loop where Lola's stale pre-OAuth "falling back" lines from
+    earlier in the same log were being read as the current state — triggering the
+    OAuth-correction restart every health-check tick (2026-05-09 incident)."""
     log_path = agent.get("daemon_log")
     if not log_path or not os.path.exists(log_path):
         return None
@@ -444,7 +451,8 @@ def check_oauth_mode(agent):
         with open(log_path) as f:
             lines = f.readlines()
         for line in reversed(lines):
-            if "Using Pro OAuth token" in line:
+            # Match either Pro variant via the stable "Using Pro" prefix.
+            if "Using Pro" in line and "OAuth token" in line:
                 return "pro"
             if "falling back to API key" in line:
                 return "api_key"
