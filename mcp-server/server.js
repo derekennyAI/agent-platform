@@ -1856,9 +1856,41 @@ server.tool(
 const REGISTRY_FILE = "/Users/YOUR_MAC_USERNAME/derek/agent-infra/agents.json";
 const TMUX_BIN = "/opt/homebrew/bin/tmux";
 
+// Tripwire: agents.json keeps getting re-templatized (placeholders leaking back
+// from sync_agent_platform.sh's sanitize step). Catch any read where the
+// content contains the placeholder pattern, substitute in-memory, and ALSO
+// rewrite the file so the next reader sees clean state. Loud-log every
+// recurrence so we can eventually pin the writer.
+// Incidents: 2026-05-09 morning, 2026-05-10 17:42 PT. Both broke platform_status
+// and triggered fix_mcp_scheduler floods.
+const REGISTRY_PLACEHOLDER_SUBS = [
+  [/YOUR_MAC_USERNAME/g, "YOUR_MAC_USERNAME"],
+  [/YOUR_TELEGRAM_CHAT_ID/g, "YOUR_TELEGRAM_CHAT_ID"],
+];
+
 function loadRegistry() {
   try {
-    return JSON.parse(readFileSync(REGISTRY_FILE, "utf8")).agents || {};
+    let raw = readFileSync(REGISTRY_FILE, "utf8");
+    let needsRepair = false;
+    for (const [pattern] of REGISTRY_PLACEHOLDER_SUBS) {
+      if (pattern.test(raw)) { needsRepair = true; break; }
+      pattern.lastIndex = 0; // reset regex state for next call
+    }
+    if (needsRepair) {
+      const before = raw.length;
+      for (const [pattern, replacement] of REGISTRY_PLACEHOLDER_SUBS) {
+        raw = raw.replace(pattern, replacement);
+      }
+      // Write the repaired content back so other readers (Python scripts,
+      // shell jq lookups) see a clean file too.
+      try { writeFileSync(REGISTRY_FILE, raw); } catch (_) { /* read-only fs: continue with in-memory repair */ }
+      // Loud telemetry — every recurrence should be visible.
+      try {
+        const stamp = new Date().toISOString();
+        process.stderr.write(`[${stamp}] [admin-mcp] WARNING agents.json contained template placeholders — auto-repaired (${before} bytes). Investigate the writer.\n`);
+      } catch (_) {}
+    }
+    return JSON.parse(raw).agents || {};
   } catch {
     return {};
   }
