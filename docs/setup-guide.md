@@ -1,6 +1,6 @@
 # Setup Guide
 
-Complete walkthrough for setting up the Agent Platform from scratch.
+Complete walkthrough for setting up the Fleet from scratch.
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ Complete walkthrough for setting up the Agent Platform from scratch.
 
 ```bash
 git clone https://github.com/ennyai/agent-platform.git
-cd agent-platform
+cd fleet
 ./setup.sh
 ```
 

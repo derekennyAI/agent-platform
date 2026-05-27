@@ -48,7 +48,7 @@ For skill scripts that need credentials at runtime, use the vault client library
 
 ```python
 import sys
-sys.path.insert(0, "/path/to/agent-platform/mcp-server")
+sys.path.insert(0, "/path/to/fleet/mcp-server")
 from vault_template import AGENT_NAME, get_cred, get_creds
 
 # Single credential

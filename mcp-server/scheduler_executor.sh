@@ -30,7 +30,7 @@ PYEOF
 fi
 
 # Supabase config
-SUPABASE_URL="${SUPABASE_URL:-https://mfrzhijvfbwumutajqeh.supabase.co}"
+SUPABASE_URL="${SUPABASE_URL:-https://YOUR_SUPABASE_PROJECT_ID.supabase.co}"
 SUPABASE_KEY="${SUPABASE_SERVICE_KEY:-}"
 
 # Source infra logging library
@@ -95,6 +95,19 @@ spawn_push_oneshot() {
     now_ts=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$now_ts] START $tid: ${desc:0:120}" >> "$push_log"
 
+    # Read TELEGRAM_STATE_DIR from the agent's plist so push one-shots
+    # use the correct bot (fixes recurring bot-collision where derek's
+    # pushes grabbed admin's @NewDerekBot instead of @farlenTestBot).
+    local tg_state_dir=""
+    local agent_plist="$HOME/Library/LaunchAgents/com.${agent}-agent.daemon.plist"
+    if [ -f "$agent_plist" ]; then
+        tg_state_dir=$(/opt/homebrew/bin/python3 -c "
+import plistlib
+with open('$agent_plist', 'rb') as f:
+    print(plistlib.load(f).get('EnvironmentVariables', {}).get('TELEGRAM_STATE_DIR', ''))
+" 2>/dev/null || true)
+    fi
+
     # Run in background — scheduler shouldn't block on claude's execution time
     (
         cd "$workspace"
@@ -105,6 +118,7 @@ spawn_push_oneshot() {
             AGENT_NAME="$agent" \
             SUPABASE_URL="$SUPABASE_URL" \
             SUPABASE_SERVICE_KEY="$SUPABASE_KEY" \
+            ${tg_state_dir:+TELEGRAM_STATE_DIR="$tg_state_dir"} \
             "$CLAUDE_BIN" -p "SCHEDULED TASK [$tid]: $desc" \
             --dangerously-skip-permissions \
             --mcp-config "$mcp_config" \
@@ -126,7 +140,7 @@ import json, os, urllib.request
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc).isoformat()
 svc = os.environ.get("SUPABASE_SERVICE_KEY", "")
-base = os.environ.get("SUPABASE_URL", "https://mfrzhijvfbwumutajqeh.supabase.co")
+base = os.environ.get("SUPABASE_URL", "https://YOUR_SUPABASE_PROJECT_ID.supabase.co")
 if svc:
     try:
         req = urllib.request.Request(
@@ -546,7 +560,7 @@ recurring = '$recurring'
 deactivate = recurring.lower() == 'false'
 
 svc_key = os.environ.get('SUPABASE_SERVICE_KEY', '')
-base_url = os.environ.get('SUPABASE_URL', 'https://mfrzhijvfbwumutajqeh.supabase.co')
+base_url = os.environ.get('SUPABASE_URL', 'https://YOUR_SUPABASE_PROJECT_ID.supabase.co')
 
 # Primary: Update Supabase
 if svc_key:

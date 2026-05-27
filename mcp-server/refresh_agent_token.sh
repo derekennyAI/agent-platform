@@ -12,7 +12,7 @@ set -euo pipefail
 
 AGENT_NAME="${1:?Usage: refresh_agent_token.sh <agent_name> <daemon_label>}"
 DAEMON_LABEL="${2:?Usage: refresh_agent_token.sh <agent_name> <daemon_label>}"
-EDGE_URL="https://mfrzhijvfbwumutajqeh.supabase.co/functions/v1/oauth-exchange"
+EDGE_URL="https://YOUR_SUPABASE_PROJECT_ID.supabase.co/functions/v1/oauth-exchange"
 CREDS_FILE="$HOME/.claude-${AGENT_NAME}/.credentials.json"
 PLIST="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
 FARLEN_CHAT="YOUR_TELEGRAM_CHAT_ID"

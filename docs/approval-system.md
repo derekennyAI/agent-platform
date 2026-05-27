@@ -27,7 +27,7 @@ The approval gate is registered in each agent's `settings.json` as a PreToolUse 
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /path/to/agent-platform/hooks/approval-gate.py"
+            "command": "python3 /path/to/fleet/hooks/approval-gate.py"
           }
         ]
       }

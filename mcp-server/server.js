@@ -6,7 +6,7 @@
  * 1. Admin Verification — agents verify if admin-issued tasks are legitimate
  * 2. Credential Vault — agents store/retrieve scoped credentials
  *
- * Backed by Supabase (mfrzhijvfbwumutajqeh).
+ * Backed by Supabase (YOUR_SUPABASE_PROJECT_ID).
  * Each agent identifies itself via AGENT_NAME env var.
  */
 
@@ -14,7 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co";
+const SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co";
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const AGENT_NAME = process.env.AGENT_NAME || "unknown";
 
@@ -44,11 +44,19 @@ async function supabaseQuery(table, method, params = {}) {
 
   if (method === "POST") {
     headers["Prefer"] = "return=representation,resolution=merge-duplicates";
+    if (params.headers) Object.assign(headers, params.headers);
     if (params.onConflict) {
       url.searchParams.set("on_conflict", params.onConflict);
     }
     const resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(params.body) });
-    return resp.json();
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok) {
+      const err = new Error(`Supabase POST ${table} failed (${resp.status}): ${JSON.stringify(data)}`);
+      err.status = resp.status;
+      err.body = data;
+      throw err;
+    }
+    return data;
   }
 
   if (method === "PATCH") {
@@ -56,6 +64,12 @@ async function supabaseQuery(table, method, params = {}) {
       url.searchParams.set(k, v);
     }
     const resp = await fetch(url, { method: "PATCH", headers, body: JSON.stringify(params.body) });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      const err = new Error(`Supabase PATCH ${table} failed (${resp.status}): ${body}`);
+      err.status = resp.status;
+      throw err;
+    }
     return resp.status;
   }
 
@@ -64,6 +78,12 @@ async function supabaseQuery(table, method, params = {}) {
       url.searchParams.set(k, v);
     }
     const resp = await fetch(url, { method: "DELETE", headers });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      const err = new Error(`Supabase DELETE ${table} failed (${resp.status}): ${body}`);
+      err.status = resp.status;
+      throw err;
+    }
     return resp.status;
   }
 }
@@ -545,14 +565,18 @@ server.tool(
     }
 
     // Grant permission (upsert)
-    const result = await supabaseQuery("skill_permissions", "POST", {
-      body: {
-        agent_name: agent,
-        skill_name,
-        granted_by: AGENT_NAME,
-      },
-      onConflict: "agent_name,skill_name",
-    });
+    try {
+      await supabaseQuery("skill_permissions", "POST", {
+        body: {
+          agent_name: agent,
+          skill_name,
+          granted_by: AGENT_NAME,
+        },
+        onConflict: "agent_name,skill_name",
+      });
+    } catch (e) {
+      return { content: [{ type: "text", text: JSON.stringify({ success: false, agent, skill_name, error: e.message }, null, 2) }] };
+    }
 
     const skill = catalog[0];
 

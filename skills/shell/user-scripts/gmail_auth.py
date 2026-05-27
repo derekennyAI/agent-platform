@@ -87,7 +87,7 @@ def _save_token(token_data, source):
     try:
         from vault_client import get_credential as _gc
         # Store updated token in vault via direct Supabase call
-        SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
+        SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co"
         svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
         if svc_key:
             data = json.dumps({

@@ -330,9 +330,29 @@ def main():
     except Exception as e:
         sys.stderr.write(f"admin bot token not loadable: {e}\n")
 
-    # Read agent registry
+    # Read agent registry — with placeholder tripwire (mirrors server.js
+    # loadRegistry). sync_agent_platform.sh's sanitize step occasionally leaks
+    # YOUR_MAC_USERNAME / YOUR_TELEGRAM_CHAT_ID placeholders back into the live
+    # file. Detect and auto-repair on read; write the clean content back so
+    # parallel readers (server.js, scheduler_executor.sh's jq lookups, etc.)
+    # see fixed state. Loud-log every recurrence.
     try:
-        reg = json.load(open(AGENTS_JSON))["agents"]
+        raw = open(AGENTS_JSON).read()
+        placeholders = [("YOUR_MAC_USERNAME", "YOUR_MAC_USERNAME"),
+                        ("YOUR_TELEGRAM_CHAT_ID", "YOUR_TELEGRAM_CHAT_ID")]
+        if any(p in raw for p, _ in placeholders):
+            for p, r in placeholders:
+                raw = raw.replace(p, r)
+            try:
+                with open(AGENTS_JSON, "w") as f:
+                    f.write(raw)
+            except Exception:
+                pass  # read-only fs: in-memory repair still proceeds
+            sys.stderr.write(
+                f"[{__import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()}] "
+                "WARNING agents.json contained template placeholders — auto-repaired. Investigate the writer.\n"
+            )
+        reg = json.loads(raw)["agents"]
     except Exception as e:
         sys.stderr.write(f"agents.json not loadable: {e}\n")
         sys.exit(2)
