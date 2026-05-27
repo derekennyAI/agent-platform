@@ -1,6 +1,13 @@
-# Fleet
+<p align="center">
+  <img src="assets/fleet-logo.svg" width="80" alt="Fleet logo">
+</p>
 
-A complete platform for running a managed fleet of persistent AI agents powered by Claude Code. Each agent has its own workspace, credentials vault, skills, scheduled tasks, and communication channels.
+<h1 align="center">Fleet</h1>
+
+<p align="center">
+  A complete platform for running a managed fleet of persistent AI agents powered by Claude Code.<br>
+  Each agent gets its own workspace, credentials vault, skills, scheduled tasks, and communication channels.
+</p>
 
 ## What you get
 
