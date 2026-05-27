@@ -156,7 +156,7 @@ Standard 5-field cron expressions. All times are in the machine's **local timezo
 The executor is a bash script that runs every minute via a single system crontab entry:
 
 ```crontab
-* * * * * /path/to/agent-platform/mcp-server/scheduler_executor.sh >> /path/to/scheduler.log 2>&1
+* * * * * /path/to/fleet/mcp-server/scheduler_executor.sh >> /path/to/scheduler.log 2>&1
 ```
 
 ### Execution flow (every minute)

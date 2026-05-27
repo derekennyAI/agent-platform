@@ -1,6 +1,6 @@
 # Startup Protocol
 
-This document describes the complete launch sequence for an agent in the Agent Platform, from launchd starting the process through the agent being fully operational and ready to receive messages. It covers the launch gate system that prevents agents from responding before they have full context.
+This document describes the complete launch sequence for an agent in the Fleet, from launchd starting the process through the agent being fully operational and ready to receive messages. It covers the launch gate system that prevents agents from responding before they have full context.
 
 ---
 

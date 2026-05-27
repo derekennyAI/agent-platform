@@ -199,7 +199,7 @@ def _save_refreshed_token(new_token):
         from vault_client import get_credential  # re-import to avoid circular
         # Use the Supabase REST API directly for upsert
         import urllib.request as _ur
-        VAULT_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
+        VAULT_URL = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co"
         VAULT_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
         if VAULT_KEY and new_token.get("access_token"):
             for k, v in [(access_key, new_token["access_token"]), (refresh_key, new_token.get("refresh_token", ""))]:

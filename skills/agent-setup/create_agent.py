@@ -768,7 +768,7 @@ infra_info "$COMP" "Starting {persona} in tmux session '$SESSION'"
 
 # Read per-agent OAuth token — refresh inline if expired
 CREDS_FILE="$HOME/.claude-{name}/.credentials.json"
-EDGE_URL="https://mfrzhijvfbwumutajqeh.supabase.co/functions/v1/oauth-exchange"
+EDGE_URL="https://YOUR_SUPABASE_PROJECT_ID.supabase.co/functions/v1/oauth-exchange"
 PRO_TOKEN=""
 
 if [ -f "$CREDS_FILE" ]; then
@@ -1034,6 +1034,182 @@ def main():
     }
     save_registry(reg)
 
+    # 7. Schedule default housekeeping tasks + grant default skill bundle.
+    # Without this, new agents show up empty on the dashboard (no skills, no
+    # scheduled tasks, no activity stream) — exactly Lola's 2026-05-09 → 13 gap.
+    # If SUPABASE_SERVICE_KEY isn't in env we skip with a warning rather than
+    # failing the whole provision; operator can run these manually.
+    print(f"[7/8] Inserting agents row + scheduling default tasks + granting default skills...")
+    supabase_url = os.environ.get("SUPABASE_URL", "https://YOUR_SUPABASE_PROJECT_ID.supabase.co")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not supabase_key:
+        print(f"  WARNING: SUPABASE_SERVICE_KEY not in env — skipping agents-row insert + task/skill seeding.")
+        print(f"  Manually: insert into agents, schedule_task daily_memory_compact, grant_skill defaults.")
+    else:
+        import urllib.request, urllib.parse
+
+        # --- Insert agents row FIRST. skill_permissions and scheduled_tasks
+        # have FKs to agents(name); without this row every downstream POST
+        # silently 409s and the dashboard pop-out comes up empty (the Lola
+        # 2026-05-13 incident). ---
+        # bot_info is "@handle (Display Name)" from verify_bot — extract handle.
+        tg_handle = bot_info.split()[0] if bot_info and bot_info.startswith("@") else None
+        agents_payload = {
+            "name": name,
+            "persona": args.persona,
+            "human": args.human,
+            "status": "active",
+            "model": args.model,
+            "timezone": args.timezone,
+            "telegram_bot": tg_handle,
+            "telegram_chat_id": str(args.user_id) if args.user_id else None,
+            "workspace_path": str(ws),
+            "tmux_session": f"{name}-agent",
+            "daemon_label": f"com.{name}-agent.daemon",
+            "billing_type": "pro",
+        }
+        try:
+            req = urllib.request.Request(
+                f"{supabase_url}/rest/v1/agents?on_conflict=name",
+                data=json.dumps(agents_payload).encode(),
+                headers={
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal,resolution=merge-duplicates",
+                },
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=10)
+            print(f"  Inserted agents row for '{name}'.")
+        except Exception as e:
+            print(f"  ERROR: failed to insert agents row — {e}. Downstream FKs will fail.")
+
+        # --- Default scheduled-task bundle (parity with vera/derek/etc).
+        # session_memory is the critical one: it fires the `log_interaction`
+        # MCP call every 30 min, which is what populates interaction_logs
+        # + memory/sessions/. Without it, conversations vanish without a trace
+        # (the Lola 2026-05-09 onboarding session was lost this way).
+        # Stagger compaction time per-agent so multiple new agents don't
+        # collide on the same minute. ---
+        compact_minute = abs(hash(name)) % 55 + 5  # minute 5-59
+
+        DEFAULT_SCHEDULED_TASKS = [
+            {
+                "id": f"sched_{name}_session_memory",
+                "schedule": "*/30 * * * *",
+                "trigger": "pull",
+                "task_description": (
+                    f"Session memory review: Check for idle conversations (no messages from {args.human} "
+                    f"in 10+ min after active chat). If idle: (1) Write a session summary to "
+                    f"memory/sessions/YYYY-MM-DD_HH.md (use hour of session start). Include: what was "
+                    f"discussed, actions taken, decisions made, memories saved, open items, failed "
+                    f"approaches. (2) Call the `log_interaction` MCP tool with categories, "
+                    f"request_summary, outcome, skill_used, skill_gap, satisfaction. (3) Also write a "
+                    f"backup analytics entry to ~/{name}/analytics.jsonl. Update any stale memory files "
+                    f"if you learned something new. Background task — don't message {args.human} unless "
+                    f"you have a pending question."
+                ),
+            },
+            {
+                "id": f"sched_{name}_admin_poll",
+                "schedule": "0 * * * *",
+                "trigger": "push",
+                "task_description": (
+                    "Check for pending admin tasks: Call list_pending_tasks. If any tasks are returned, "
+                    "verify and execute them, then mark complete. This is how Admin communicates with you."
+                ),
+            },
+            {
+                "id": f"sched_{name}_daily_memory_compact",
+                "schedule": f"{compact_minute} 3 * * *",
+                "trigger": "push",
+                "task_description": (
+                    f"Daily memory compaction: Review today's session summaries in ~/{name}/memory/sessions/. "
+                    f"Merge overlapping sessions from the same day into a single coherent summary. Promote "
+                    f"durable learnings into the right type memory (user, feedback, project, reference, "
+                    f"failed). Drop chatter. Use store_memory + supersede_memory via admin-control MCP — "
+                    f"never edit memory files directly. Background task; no Telegram or escalation output "
+                    f"unless a real anomaly is found."
+                ),
+            },
+            {
+                "id": f"sched_{name}_log_rotation",
+                "schedule": "20 0 * * 1",
+                "trigger": "push",
+                "task_description": (
+                    f"Weekly log rotation: Archive previous week's session summaries older than 14 days "
+                    f"from memory/sessions/ into memory/sessions/archive/. Clean up any temporary files "
+                    f"in ~/{name}/."
+                ),
+            },
+            {
+                "id": f"sched_{name}_weekly_memory_review",
+                "schedule": "23 4 * * 0",
+                "trigger": "push",
+                "task_description": (
+                    "Weekly memory review: Deep review of all memory files. Remove stale projects, merge "
+                    "contradictory feedback, check for outdated references, verify MEMORY.md index health "
+                    "(no orphans, under 200 lines). Write report to memory/sessions/YYYY-MM-DD_weekly.md. "
+                    "Background task."
+                ),
+            },
+        ]
+        for task in DEFAULT_SCHEDULED_TASKS:
+            payload = {
+                "id": task["id"],
+                "agent_name": name,
+                "schedule": task["schedule"],
+                "task_description": task["task_description"],
+                "recurring": True,
+                "active": True,
+                "trigger": task["trigger"],
+                "created_by": "create_agent.py",
+            }
+            try:
+                req = urllib.request.Request(
+                    f"{supabase_url}/rest/v1/scheduled_tasks?on_conflict=id",
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal,resolution=merge-duplicates",
+                    },
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=10)
+                print(f"  Scheduled: {task['id']} ({task['schedule']}, {task['trigger']})")
+            except Exception as e:
+                print(f"  WARNING: failed to schedule {task['id']} — {e}")
+
+        # --- Grant default skill bundle. Agent-name-specific gmail/calendar
+        # skills get granted later when the user's OAuth flow runs (the
+        # onboarding interview captures their email/calendar accounts). ---
+        DEFAULT_SKILLS = [
+            "gmail_inbox", "calendar_management", "send_email", "email_triage",
+            "web_research", "reminders", "delivery_tracking", "internal_communications",
+        ]
+        for skill in DEFAULT_SKILLS:
+            payload = {"agent_name": name, "skill_name": skill, "granted_by": "create_agent.py"}
+            try:
+                req = urllib.request.Request(
+                    f"{supabase_url}/rest/v1/skill_permissions",
+                    data=json.dumps(payload).encode(),
+                    headers={
+                        "apikey": supabase_key,
+                        "Authorization": f"Bearer {supabase_key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal,resolution=merge-duplicates",
+                    },
+                    method="POST",
+                )
+                urllib.request.urlopen(req, timeout=10)
+            except Exception as e:
+                print(f"  WARNING: failed to grant {skill} — {e}")
+        print(f"  Granted {len(DEFAULT_SKILLS)} default skills.")
+
+    # 8. Final summary
     print(f"\n{'='*60}")
     print(f"  {args.persona} is LIVE")
     print(f"{'='*60}")

@@ -1,6 +1,6 @@
-# Agent Platform
+# Fleet
 
-A complete platform for running persistent AI agents powered by Claude Code. Each agent has its own workspace, credentials vault, skills, scheduled tasks, and communication channels.
+A complete platform for running a managed fleet of persistent AI agents powered by Claude Code. Each agent has its own workspace, credentials vault, skills, scheduled tasks, and communication channels.
 
 ## What you get
 
@@ -31,8 +31,8 @@ A complete platform for running persistent AI agents powered by Claude Code. Eac
 ## Quick Start
 
 ```bash
-git clone https://github.com/ennyai/agent-platform.git
-cd agent-platform
+git clone https://github.com/derekennyAI/agent-platform.git fleet
+cd fleet
 ./setup.sh
 ```
 
@@ -72,7 +72,7 @@ Your agent is now running. Message it on Telegram.
 ## Architecture
 
 ```
-agent-platform/               # This repo — the shared platform
+fleet/                         # This repo — the shared platform
 ├── setup.sh                   # One-command setup
 ├── mcp-server/                # MCP admin-control server (Node.js)
 │   ├── server.js              # MCP tools: vault, skills, scheduling, state

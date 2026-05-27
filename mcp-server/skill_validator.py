@@ -24,7 +24,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-SUPABASE_URL = "https://mfrzhijvfbwumutajqeh.supabase.co"
+SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 
 # --- Violation patterns ---

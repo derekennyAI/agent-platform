@@ -28,7 +28,7 @@ import subprocess
 import plistlib
 from pathlib import Path
 
-EDGE_FUNCTION_BASE = "https://mfrzhijvfbwumutajqeh.supabase.co/functions/v1"
+EDGE_FUNCTION_BASE = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co/functions/v1"
 CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 REDIRECT_URI = "https://platform.claude.com/oauth/code/callback"
 SCOPES = "user:profile user:inference user:sessions:claude_code"  # profile needed for /oauth/usage-check (dashboard quota)
@@ -126,7 +126,7 @@ def cmd_exchange(args):
 
     # Store tokens in Supabase agent_credentials table via REST API
     import datetime
-    supabase_url = "https://mfrzhijvfbwumutajqeh.supabase.co"
+    supabase_url = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co"
     svc_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not svc_key:
         # Fallback: read from Management API token for DB query

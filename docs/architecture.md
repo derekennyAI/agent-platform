@@ -1,6 +1,6 @@
 # Architecture
 
-Complete architectural overview of the Agent Platform. This document describes how the platform runs persistent AI agents powered by Claude Code on macOS, covering every component from the daemon layer through the database.
+Complete architectural overview of the Fleet. This document describes how the platform runs persistent AI agents powered by Claude Code on macOS, covering every component from the daemon layer through the database.
 
 ---
 
@@ -53,12 +53,12 @@ Agents are resilient: launchd has `KeepAlive` set to `true`, so if the tmux sess
 
 ## Component Map
 
-### Platform Repository (`agent-platform/`)
+### Platform Repository (`fleet/`)
 
 The shared platform code that all agents depend on:
 
 ```
-agent-platform/
+fleet/
 ├── setup.sh                    # One-command setup (prereq check, npm install, crontab)
 ├── mcp-server/
 │   ├── server.js               # MCP admin-control server — 6 modules, 30+ tools
@@ -458,7 +458,7 @@ The scheduler is a two-part system: the MCP tools manage task definitions in Sup
 
 1. **System crontab** runs `scheduler_executor.sh` every minute:
    ```
-   * * * * * /path/to/agent-platform/mcp-server/scheduler_executor.sh >> /tmp/scheduler.log 2>&1
+   * * * * * /path/to/fleet/mcp-server/scheduler_executor.sh >> /tmp/scheduler.log 2>&1
    ```
 
 2. **Executor reads tasks** — tries Supabase first (via curl + REST API), falls back to local `scheduled_tasks.json` if Supabase is unreachable.
@@ -602,7 +602,7 @@ Certain infrastructure files (vault_client.py, server.js, create_agent.py, etc.)
 ├── .config/<agent>/                  # Credential cache
 └── analytics.jsonl                   # Usage log
 
-agent-platform/                       # Shared platform
+fleet/                       # Shared platform
 ├── mcp-server/                       # MCP server + scheduler + vault libs
 ├── hooks/                            # PreToolUse approval gate
 ├── skills/                           # Shared skill library

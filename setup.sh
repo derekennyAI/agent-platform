@@ -1,5 +1,5 @@
 #!/bin/bash
-# Agent Platform — One-command setup
+# Fleet — One-command setup
 # Usage: ./setup.sh
 
 set -e
@@ -12,7 +12,7 @@ NC='\033[0m'
 
 echo ""
 echo "=========================================="
-echo "  Agent Platform Setup"
+echo "  Fleet Setup"
 echo "=========================================="
 echo ""
 
