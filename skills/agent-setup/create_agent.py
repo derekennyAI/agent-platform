@@ -63,6 +63,14 @@ def create_workspace(name, persona, human, tz, model):
             "defaultMode": "bypassPermissions",
             "skipDangerousModePermissionPrompt": True,
         },
+        "enableAllProjectMcpServers": True,
+        "channelsEnabled": True,
+        "enabledPlugins": {
+            "telegram@claude-plugins-official": True,
+        },
+        "allowedChannelPlugins": [
+            {"marketplace": "claude-plugins-official", "plugin": "telegram"},
+        ],
     }
     (ws / "settings.json").write_text(json.dumps(settings, indent=2))
 

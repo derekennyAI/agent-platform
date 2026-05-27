@@ -7,6 +7,15 @@
   "skipDangerousModePermissionPrompt": true,
   "enableAllProjectMcpServers": true,
   "channelsEnabled": true,
+  "enabledPlugins": {
+    "telegram@claude-plugins-official": true
+  },
+  "allowedChannelPlugins": [
+    {
+      "marketplace": "claude-plugins-official",
+      "plugin": "telegram"
+    }
+  ],
   "hooks": {
     "PreToolUse": [
       {
