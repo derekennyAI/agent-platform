@@ -114,14 +114,23 @@ else
     # Don't exit — let the rest of setup continue, agent creation will fail if tables missing
 fi
 
-# --- 5. Make scripts executable ---
-echo "[5/7] Setting permissions..."
+# --- 5. Make scripts executable + deploy hooks ---
+echo "[5/7] Setting permissions and deploying hooks..."
 
 chmod +x "$SCRIPT_DIR/scripts/launcher.sh" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/mcp-server/scheduler_executor.sh" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/mcp-server/refresh_agent_token.sh" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/mcp-server/refresh_all_agents.sh" 2>/dev/null || true
 chmod +x "$SCRIPT_DIR/scripts/security_watch.py" 2>/dev/null || true
+chmod +x "$SCRIPT_DIR/scripts/patch_telegram_plugin.py" 2>/dev/null || true
+chmod +x "$SCRIPT_DIR/scripts/patch_telegram_plugin.sh" 2>/dev/null || true
+
+# Deploy hooks to ~/.claude/hooks/ — the path generated agent settings.json
+# files reference (UserPromptSubmit/inject_recent_tasks, PreToolUse/approval-gate).
+# Without this, a fresh install would reference hook files that don't exist.
+mkdir -p "$HOME/.claude/hooks"
+cp "$SCRIPT_DIR"/hooks/*.py "$HOME/.claude/hooks/" 2>/dev/null || true
+chmod +x "$HOME"/.claude/hooks/*.py 2>/dev/null || true
 
 echo -e "  ${GREEN}Done${NC}"
 
