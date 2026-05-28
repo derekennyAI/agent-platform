@@ -740,6 +740,12 @@ COMP="launcher:{name}"
 # Source infra logging library
 source "/Users/YOUR_MAC_USERNAME/derek/skills/admin-mcp/infra_lib.sh"
 
+# Apply the telegram plugin orphan-watchdog patch (idempotent).
+# Fixes CC 2.1.153 regression where the plugin self-terminates on PPID drift.
+bash "/Users/YOUR_MAC_USERNAME/agent-platform/scripts/patch_telegram_plugin.sh" 2>&1 | while IFS= read -r line; do
+    [ -n "$line" ] && infra_info "$COMP" "patch_telegram_plugin: $line"
+done
+
 # --- Launch Gate: clear ready flag + send restart greeting ---
 rm -f "$HOME/{name}/.ready"
 
@@ -886,6 +892,24 @@ infra_info "$COMP" "Session started successfully"
 sleep 2
 touch "$HOME/{name}/.ready"
 infra_info "$COMP" "Gate opened (.ready touched)"
+
+# bun-death watchdog: telegram plugin can self-terminate (CC 2.1.153 ppid
+# regression). If bun child is gone for >30s, kill the tmux session so launchd
+# restarts the daemon. Belt-and-suspenders for the server.ts patch — covers
+# any future plugin/runtime regression.
+(while $TMUX has-session -t "$SESSION" 2>/dev/null; do
+    sleep 60
+    pane_pid=$($TMUX display-message -t "$SESSION" -p '#{{pane_pid}}' 2>/dev/null)
+    if [ -n "$pane_pid" ] && ! pgrep -P "$pane_pid" -f "bun" >/dev/null 2>&1; then
+        sleep 30
+        pane_pid=$($TMUX display-message -t "$SESSION" -p '#{{pane_pid}}' 2>/dev/null)
+        if [ -n "$pane_pid" ] && ! pgrep -P "$pane_pid" -f "bun" >/dev/null 2>&1; then
+            infra_warn "$COMP" "bun plugin died — killing tmux session for launchd restart"
+            $TMUX kill-session -t "$SESSION" 2>/dev/null
+            break
+        fi
+    fi
+done) &
 
 # Monitor the session — exit when it dies so launchd can restart us
 while $TMUX has-session -t "$SESSION" 2>/dev/null; do
