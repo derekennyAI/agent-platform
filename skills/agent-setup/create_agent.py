@@ -83,9 +83,14 @@ def create_workspace(name, persona, human, tz, model):
     config_dir = Path(f"/Users/YOUR_MAC_USERNAME/.claude-{name}")
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "settings.json").write_text(json.dumps({
+        "enableAllProjectMcpServers": True,
+        "channelsEnabled": True,
         "enabledPlugins": {
             "telegram@claude-plugins-official": True,
         },
+        "allowedChannelPlugins": [
+            {"marketplace": "claude-plugins-official", "plugin": "telegram"},
+        ],
     }, indent=2))
 
     # --- CLAUDE.md ---
