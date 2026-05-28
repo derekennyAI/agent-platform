@@ -57,6 +57,15 @@ def create_workspace(name, persona, human, tz, model):
     (ws / "memory" / "sessions").mkdir(exist_ok=True)
 
     # --- workspace settings.json (passed to Claude Code via --settings) ---
+    # Hooks:
+    #   UserPromptSubmit/inject_recent_tasks — injects current time + the tail of
+    #     push_tasks.log AND the verbatim text of recent outbound messages
+    #     (sent-messages.jsonl) so the live session can see what scheduled-task
+    #     one-shots sent on its behalf. Pairs with the reply-tool logging added
+    #     by patch_telegram_plugin.py — without both halves the agent can't
+    #     answer "explain the joke you just sent."
+    #   PreToolUse/approval-gate — routes gated actions to the user via Telegram.
+    hooks_dir = "/Users/YOUR_MAC_USERNAME/.claude/hooks"
     settings = {
         "model": model,
         "permissions": {
@@ -71,6 +80,24 @@ def create_workspace(name, persona, human, tz, model):
         "allowedChannelPlugins": [
             {"marketplace": "claude-plugins-official", "plugin": "telegram"},
         ],
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": ".*",
+                    "hooks": [
+                        {"type": "command", "command": f"python3 {hooks_dir}/approval-gate.py"},
+                    ],
+                },
+            ],
+            "UserPromptSubmit": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "command", "command": f"python3 {hooks_dir}/inject_recent_tasks.py"},
+                    ],
+                },
+            ],
+        },
     }
     (ws / "settings.json").write_text(json.dumps(settings, indent=2))
 
