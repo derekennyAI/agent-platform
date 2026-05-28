@@ -55,6 +55,21 @@ WATCHDOG_REPLACEMENT = '''setInterval(() => {
   if (orphaned) shutdown('orphan_watchdog')
 }, 5000).unref()'''
 
+# Outbound-log: after the reply tool successfully sends its text chunks, record
+# the verbatim text to sent-messages.jsonl. This is the ground truth of what the
+# user received — scheduled-task one-shots send via this same path, and the main
+# session (which never sees the one-shot's transcript) reads this log via the
+# inject_recent_tasks hook to recover what was sent on its behalf.
+OUTBOUND_ANCHOR = "        // Files go as separate messages (Telegram doesn't mix text+file in one"
+OUTBOUND_LOG = '''        // outbound-log-v1: record what we actually sent so the main session
+        // (which never sees one-shot transcripts) can recover the content.
+        try {
+          _traceAppend(join(STATE_DIR, 'sent-messages.jsonl'),
+            JSON.stringify({ ts: new Date().toISOString(), chat_id, text }) + '\\n')
+        } catch {}
+
+'''
+
 
 def patch_one(path: str) -> bool:
     """Patch one server.ts file. Returns True if changed."""
@@ -104,6 +119,10 @@ def patch_one(path: str) -> bool:
     )
     if orphan_re.search(content):
         content = orphan_re.sub(WATCHDOG_REPLACEMENT, content)
+
+    # --- Patch 4: outbound message logging in the reply tool
+    if "outbound-log-v1" not in content and OUTBOUND_ANCHOR in content:
+        content = content.replace(OUTBOUND_ANCHOR, OUTBOUND_LOG + OUTBOUND_ANCHOR, 1)
 
     if content != original:
         Path(path).write_text(content)
