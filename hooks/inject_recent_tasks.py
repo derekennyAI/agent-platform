@@ -20,6 +20,7 @@ import json
 import os
 import signal
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 MAX_BYTES = 8000
@@ -69,34 +70,35 @@ def main():
     except Exception:
         pass
 
+    tail = ""
     log_path = _resolve_log_path()
-    if not log_path or not log_path.exists():
-        return  # nothing to inject; silent no-op
+    if log_path and log_path.exists():
+        try:
+            tail = _read_tail(log_path)
+        except Exception:
+            pass
 
-    try:
-        tail = _read_tail(log_path)
-    except Exception:
-        return
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    if not tail:
-        return
+    parts = [f"<current_time>{now_utc}</current_time>"]
 
-    additional = (
-        "<scheduled_task_history>\n"
-        "Tail of your push_tasks.log — output from scheduled-task one-shots.\n"
-        "Your live session does NOT contain transcripts of these one-shots; this\n"
-        "block does. If the user references work you don't immediately recall\n"
-        "(\"the four topics,\" \"this morning's report,\" \"the items you sent\"),\n"
-        "look here first before responding.\n"
-        "\n"
-        f"{tail}\n"
-        "</scheduled_task_history>"
-    )
+    if tail:
+        parts.append(
+            "<scheduled_task_history>\n"
+            "Tail of your push_tasks.log — output from scheduled-task one-shots.\n"
+            "Your live session does NOT contain transcripts of these one-shots; this\n"
+            "block does. If the user references work you don't immediately recall\n"
+            "(\"the four topics,\" \"this morning's report,\" \"the items you sent\"),\n"
+            "look here first before responding.\n"
+            "\n"
+            f"{tail}\n"
+            "</scheduled_task_history>"
+        )
 
     payload = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": additional,
+            "additionalContext": "\n".join(parts),
         }
     }
     sys.stdout.write(json.dumps(payload))
