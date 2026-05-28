@@ -841,14 +841,35 @@ PYEOF
     fi
 fi
 
+# Prune bloated sessions so --continue does not load a conversation near context limit
+prune_session_if_bloated "$CLAUDE_CONFIG_DIR" "$COMP"
+# Resumed-vs-fresh session detection. If CLAUDE_CONFIG_DIR already has session
+# JSONLs, this is a restart (token refresh / crash / kick); use --continue so
+# the agent inherits the prior conversation. Otherwise run the startup gate.
+SESSION_JSONL_DIR="$CLAUDE_CONFIG_DIR/projects"
+CONTINUE_FLAG=""
+if [ -d "$SESSION_JSONL_DIR" ] && find "$SESSION_JSONL_DIR" -name "*.jsonl" -type f 2>/dev/null | head -1 | grep -q .; then
+    CONTINUE_FLAG="--continue"
+    APPEND_PROMPT="RESUMED SESSION: You were just restarted (token refresh / crash / kick). The conversation history is intact, but memory/*.md files and scheduled-task state may have updated in your absence. If the conversation resumes from a quiet period, briefly re-check memory/MEMORY.md and memory/sessions/ for any new entries before your next substantive action."
+    infra_info "$COMP" "Resumed session detected — launching with --continue"
+else
+    APPEND_PROMPT="CRITICAL STARTUP GATE: Before responding to ANY channel messages, you MUST first read and execute all instructions in ~/{name}/startup-instructions.md. Complete every step before handling user requests."
+    infra_info "$COMP" "Fresh session — running startup gate"
+    if [ -f "$CLAUDE_CONFIG_DIR/.last_prune" ]; then
+        PRUNE_INFO=$(cat "$CLAUDE_CONFIG_DIR/.last_prune" 2>/dev/null)
+        APPEND_PROMPT="$APPEND_PROMPT Your previous conversation was pruned due to $PRUNE_INFO. Your memory, credentials, and scheduled tasks are all intact in Supabase — only the raw conversation transcript was archived. If the user asks why you do not remember recent messages, explain that your conversation history was automatically rotated to stay within context limits, but everything you saved to memory is still available."
+        rm -f "$CLAUDE_CONFIG_DIR/.last_prune"
+    fi
+fi
+
 if [ -n "$PRO_TOKEN" ]; then
     infra_info "$COMP" "Using Pro/Max OAuth token"
     $TMUX new-session -d -s "$SESSION" -c "/Users/YOUR_MAC_USERNAME/{name}" \\
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY CLAUDE_CODE_OAUTH_TOKEN=$PRO_TOKEN TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --dangerously-skip-permissions --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt 'CRITICAL STARTUP GATE: Before responding to ANY channel messages, you MUST first read and execute all instructions in ~/{name}/startup-instructions.md. Complete every step before handling user requests.'"
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY CLAUDE_CODE_OAUTH_TOKEN=$PRO_TOKEN TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --dangerously-skip-permissions $CONTINUE_FLAG --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt '$APPEND_PROMPT'"
 else
     infra_warn "$COMP" "Pro token expired or missing — falling back to API key (Sonnet)"
     $TMUX new-session -d -s "$SESSION" -c "/Users/YOUR_MAC_USERNAME/{name}" \\
-        "env -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --model claude-sonnet-4-6 --dangerously-skip-permissions --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt 'CRITICAL STARTUP GATE: Before responding to ANY channel messages, you MUST first read and execute all instructions in ~/{name}/startup-instructions.md. Complete every step before handling user requests.'"
+        "env -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --model claude-sonnet-4-6 --dangerously-skip-permissions $CONTINUE_FLAG --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt '$APPEND_PROMPT'"
 fi
 
 if ! $TMUX has-session -t "$SESSION" 2>/dev/null; then
