@@ -26,10 +26,16 @@ from pathlib import Path
 MAX_BYTES = 8000
 MAX_LOG_SIZE = 100 * 1024 * 1024   # skip if log > 100MB (probably runaway)
 HARD_TIMEOUT_SECONDS = 1            # watchdog — abort if hook hangs
+MAX_SENT_MESSAGES = 15             # most recent outbound messages to inject
 
 # Workspace name often equals agent name; derek personal is the exception.
 AGENT_TO_WORKSPACE = {
     "derek": "derekPersonal",
+}
+
+# TELEGRAM_STATE_DIR name often equals agent name; derek uses the legacy "test".
+AGENT_TO_TELEGRAM_STATE = {
+    "derek": "test",
 }
 
 
@@ -59,6 +65,48 @@ def _read_tail(log_path):
     return data.decode(errors="replace").strip()
 
 
+def _sent_messages_path():
+    """Path to the telegram plugin's outbound message log (sent-messages.jsonl).
+    This captures the verbatim text of every message the bot sent — including
+    scheduled-task one-shots, whose transcripts the live session never sees."""
+    agent = (os.environ.get("AGENT_NAME") or "").strip()
+    if not agent:
+        return None
+    state_name = AGENT_TO_TELEGRAM_STATE.get(agent, agent)
+    return Path.home() / ".claude" / "channels" / f"telegram_{state_name}" / "sent-messages.jsonl"
+
+
+def _read_recent_sent():
+    """Return formatted recent outbound messages, or '' if none."""
+    import json as _json
+    path = _sent_messages_path()
+    if not path or not path.exists():
+        return ""
+    size = path.stat().st_size
+    if size == 0 or size > MAX_LOG_SIZE:
+        return ""
+    # Read last 32KB (plenty for MAX_SENT_MESSAGES), keep the last N JSON lines.
+    with path.open("rb") as f:
+        if size > 32000:
+            f.seek(size - 32000)
+            f.readline()
+        lines = f.read().decode(errors="replace").splitlines()
+    out = []
+    for line in lines[-MAX_SENT_MESSAGES:]:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = _json.loads(line)
+            ts = rec.get("ts", "")[:19]
+            text = (rec.get("text") or "").strip()
+            if text:
+                out.append(f"[{ts}] {text}")
+        except Exception:
+            continue
+    return "\n\n".join(out)
+
+
 def main():
     # Watchdog: if anything blocks for more than HARD_TIMEOUT_SECONDS, abort.
     signal.signal(signal.SIGALRM, _silent_exit)
@@ -82,14 +130,32 @@ def main():
 
     parts = [f"<current_time>{now_utc}</current_time>"]
 
+    try:
+        sent = _read_recent_sent()
+    except Exception:
+        sent = ""
+
+    if sent:
+        parts.append(
+            "<recent_messages_you_sent>\n"
+            "Verbatim text of recent messages your bot sent to the user — INCLUDING\n"
+            "messages sent by scheduled-task one-shots running in separate processes\n"
+            "(jokes, reports, reminders). Your live session does NOT contain these in\n"
+            "its transcript. If the user references something \"you\" sent that you don't\n"
+            "recall (\"the joke,\" \"that report,\" \"what you just sent\"), the actual text\n"
+            "is here — use it, don't claim you can't see it.\n"
+            "\n"
+            f"{sent}\n"
+            "</recent_messages_you_sent>"
+        )
+
     if tail:
         parts.append(
             "<scheduled_task_history>\n"
-            "Tail of your push_tasks.log — output from scheduled-task one-shots.\n"
-            "Your live session does NOT contain transcripts of these one-shots; this\n"
-            "block does. If the user references work you don't immediately recall\n"
-            "(\"the four topics,\" \"this morning's report,\" \"the items you sent\"),\n"
-            "look here first before responding.\n"
+            "Tail of your push_tasks.log — status/summary from scheduled-task one-shots.\n"
+            "Shows which tasks ran and their exit status (actual sent content is in\n"
+            "<recent_messages_you_sent> above). If the user references work you don't\n"
+            "immediately recall, look here for what ran and when.\n"
             "\n"
             f"{tail}\n"
             "</scheduled_task_history>"
