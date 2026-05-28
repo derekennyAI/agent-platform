@@ -18,7 +18,7 @@
 
 INFRA_LOG_DIR="/Users/YOUR_MAC_USERNAME/derek/logs"
 INFRA_LOG="$INFRA_LOG_DIR/infra.log"
-INFRA_CHAT_ID="YOUR_TELEGRAM_CHAT_ID"
+INFRA_CHAT_ID="8676483103"
 
 # Generate trace ID: epoch-PID
 : "${TRACE_ID:=$(date +%s)-$$}"
@@ -118,5 +118,24 @@ infra_error_user_tier() {
         _infra_telegram "$component" "$msg" "ERROR"
     else
         _infra_log "INFO" "$component" "$msg [suppressed: $agent not onboarded]"
+    fi
+}
+
+# --- Session pruning: prevent --continue from loading a bloated conversation ---
+# Call before the --continue decision block in each launcher.
+# If total JSONL size exceeds the threshold, archive and start fresh.
+# Usage: prune_session_if_bloated "$CLAUDE_CONFIG_DIR" "$COMP"
+MAX_SESSION_BYTES="${MAX_SESSION_BYTES:-52428800}"  # 50 MB default
+prune_session_if_bloated() {
+    local config_dir="$1" comp="$2"
+    local projects_dir="$config_dir/projects"
+    [ -d "$projects_dir" ] || return 0
+    local total_bytes
+    total_bytes=$(find "$projects_dir" -name "*.jsonl" -type f -exec stat -f %z {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    if [ "$total_bytes" -gt "$MAX_SESSION_BYTES" ]; then
+        local archive="$config_dir/projects-archive-$(date +%Y%m%d%H%M%S)"
+        mkdir -p "$archive"
+        find "$projects_dir" -name "*.jsonl" -type f -exec mv {} "$archive/" \; 2>/dev/null
+        infra_warn "$comp" "Session pruned: ${total_bytes} bytes exceeded ${MAX_SESSION_BYTES} — archived to $archive, next boot is fresh"
     fi
 }
