@@ -8,6 +8,12 @@ AGENT_NAME="${AGENT_NAME:-myagent}"
 TMUX_SESSION="${AGENT_NAME}-agent"
 WORKSPACE="$HOME/${AGENT_NAME}"
 CHANNELS="plugin:telegram@claude-plugins-official"
+# Model is pinned on the command line below. IMPORTANT: when a session is
+# resumed with --continue, Claude Code keeps the model it was originally
+# started on and IGNORES a changed settings.json "model" field — so a model
+# upgrade only takes effect if passed here explicitly. Keep in sync with
+# settings.json. fastMode (faster Opus output) is read from settings.json.
+MODEL="${MODEL:-claude-opus-4-8}"
 
 export PATH="/opt/homebrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 export HOME="${HOME}"
@@ -42,7 +48,7 @@ infra_info "$COMP" "Starting Claude Code in tmux session '$TMUX_SESSION'"
 
 # Start Claude Code in a detached tmux session
 # --channels flag ensures the plugin is registered for inbound notifications
-$TMUX_BIN new-session -d -s "$TMUX_SESSION" "$CLAUDE_BIN --channels $CHANNELS"
+$TMUX_BIN new-session -d -s "$TMUX_SESSION" "$CLAUDE_BIN --model $MODEL --channels $CHANNELS"
 
 if ! $TMUX_BIN has-session -t "$TMUX_SESSION" 2>/dev/null; then
     infra_critical "$COMP" "Failed to create tmux session — agent DOWN"

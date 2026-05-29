@@ -114,6 +114,63 @@ Or add to system crontab:
 0 */2 * * * cd ~ && qmd update && qmd embed
 ```
 
+## Multi-Agent Isolation (Fleet)
+
+The single shared config above is fine for ONE agent. In a fleet where agents
+serve **different people**, you must NOT put every agent's memory into one
+shared qmd index — a single daemon over one DB lets any agent search every
+other agent's private memory. Instead, give each agent its **own isolated qmd
+instance** using XDG paths.
+
+QMD respects `XDG_CONFIG_HOME` (config) and `XDG_CACHE_HOME` (the SQLite index),
+so each agent gets a private store with zero cross-agent access:
+
+```
+~/.qmd-<agent>/config/qmd/index.yml   # one "memory" collection → ~/<agent>/memory
+~/.qmd-<agent>/cache/qmd/index.sqlite # that agent's private vector index
+```
+
+Per-agent `index.yml` (only that agent's memory; no shared collections):
+
+```yaml
+collections:
+  memory:
+    path: ~/<agent>/memory
+    pattern: "**/*.md"
+    context:
+      "": "<agent>'s agent memory — private to <agent>."
+```
+
+Build the index with the agent's XDG env:
+
+```bash
+XDG_CONFIG_HOME=~/.qmd-<agent>/config XDG_CACHE_HOME=~/.qmd-<agent>/cache qmd update
+XDG_CONFIG_HOME=~/.qmd-<agent>/config XDG_CACHE_HOME=~/.qmd-<agent>/cache qmd embed
+```
+
+Wire qmd into that agent's `.mcp.json` as a **stdio** server scoped by the same
+XDG env (no shared HTTP daemon, no ports, fully isolated):
+
+```json
+{
+  "qmd": {
+    "type": "stdio",
+    "command": "qmd",
+    "args": ["mcp"],
+    "env": {
+      "XDG_CONFIG_HOME": "/Users/YOU/.qmd-<agent>/config",
+      "XDG_CACHE_HOME":  "/Users/YOU/.qmd-<agent>/cache"
+    }
+  }
+}
+```
+
+Refresh all agents' private indexes on a schedule with
+[`scripts/qmd_refresh_all.sh`](../scripts/qmd_refresh_all.sh) (pure indexing —
+no LLM, no agent quota), driven by a launchd `StartInterval` job. The memory
+markdown files themselves are regenerated from the source-of-truth store by the
+memory projector; this keeps the vector index in step.
+
 ## Search Commands
 
 ```bash

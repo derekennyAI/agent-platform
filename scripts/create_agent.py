@@ -9,7 +9,7 @@ Usage:
         --bot-token "8742237992:AAF-..." \
         --user-id "YOUR_TELEGRAM_CHAT_ID" \
         --timezone "Europe/Lisbon" \
-        [--model claude-sonnet-4-6]
+        [--model claude-opus-4-8]
 
 Creates workspace, memory system, Telegram channel, launcher, launchd plist,
 and starts the daemon.
@@ -68,6 +68,10 @@ def create_workspace(name, persona, human, tz, model):
     hooks_dir = "/Users/YOUR_MAC_USERNAME/.claude/hooks"
     settings = {
         "model": model,
+        # fastMode: Opus with faster output for live/interactive sessions.
+        # (Does not apply to `claude -p` scheduled one-shots — those run in
+        # SDK mode where fast mode is gated off.)
+        "fastMode": True,
         "permissions": {
             "defaultMode": "bypassPermissions",
             "skipDangerousModePermissionPrompt": True,
@@ -897,8 +901,14 @@ fi
 
 if [ -n "$PRO_TOKEN" ]; then
     infra_info "$COMP" "Using Pro/Max OAuth token"
+    # NOTE: --model is passed EXPLICITLY on the command line, not left to
+    # settings.json alone. With $CONTINUE_FLAG (--continue) a resumed session
+    # keeps the model it was originally started on and IGNORES a changed
+    # settings.json "model" field. The explicit --model flag overrides that,
+    # so model upgrades actually take effect on the next restart. Keep this
+    # in sync with the "model" field in settings.json.
     $TMUX new-session -d -s "$SESSION" -c "/Users/YOUR_MAC_USERNAME/{name}" \\
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY CLAUDE_CODE_OAUTH_TOKEN=$PRO_TOKEN TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --dangerously-skip-permissions $CONTINUE_FLAG --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt '$APPEND_PROMPT'"
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY CLAUDE_CODE_OAUTH_TOKEN=$PRO_TOKEN TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --model claude-opus-4-8 --dangerously-skip-permissions $CONTINUE_FLAG --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt '$APPEND_PROMPT'"
 else
     infra_warn "$COMP" "Pro token expired or missing — falling back to API key (Sonnet)"
     $TMUX new-session -d -s "$SESSION" -c "/Users/YOUR_MAC_USERNAME/{name}" \\
@@ -1052,7 +1062,7 @@ def main():
     parser.add_argument("--bot-token", required=True, help="Telegram bot token from @BotFather")
     parser.add_argument("--user-id", required=True, help="Human's Telegram user ID")
     parser.add_argument("--timezone", default="America/Los_Angeles", help="Timezone")
-    parser.add_argument("--model", default="claude-sonnet-4-6", help="Claude model")
+    parser.add_argument("--model", default="claude-opus-4-8", help="Claude model")
     args = parser.parse_args()
 
     name = args.name.lower().replace(" ", "").replace("-", "")
