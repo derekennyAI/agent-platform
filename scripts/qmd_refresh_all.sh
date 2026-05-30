@@ -17,6 +17,31 @@ LOG="$HOME/.claude/qmd-refresh-all.log"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 mkdir -p "$(dirname "$LOG")"
+
+# Single-instance guard: if a launchd StartInterval fires while a previous
+# refresh is still running (large index, slow embed), don't stack a second
+# run over the same sqlite files. Uses an atomic mkdir lock — portable to
+# macOS (no flock dependency). A stale lock (owner PID dead) is reclaimed.
+LOCKDIR="$HOME/.claude/.qmd-refresh-all.lock.d"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+    owner=$(cat "$LOCKDIR/pid" 2>/dev/null)
+    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+        echo "[$(ts)] another refresh-all is running (pid=$owner) — skip" >> "$LOG"
+        exit 0
+    fi
+    # Stale lock — previous run died without cleanup. Reclaim it.
+    rm -rf "$LOCKDIR"
+    mkdir "$LOCKDIR" 2>/dev/null || { echo "[$(ts)] could not acquire lock — skip" >> "$LOG"; exit 0; }
+fi
+echo $$ > "$LOCKDIR/pid"
+trap 'rm -rf "$LOCKDIR"' EXIT
+
+# qmd must be present — without it every agent below would log two failures.
+if ! command -v qmd >/dev/null 2>&1 && ! [ -x "$QMD" ]; then
+    echo "[$(ts)] qmd not found (looked at \$PATH + $QMD) — aborting" >> "$LOG"
+    exit 1
+fi
+
 echo "[$(ts)] qmd refresh-all starting" >> "$LOG"
 
 shopt -s nullglob

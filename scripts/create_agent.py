@@ -739,7 +739,7 @@ def create_telegram_channel(name, bot_token, user_id):
     return channel_dir
 
 
-def create_launcher(name, persona):
+def create_launcher(name, persona, model="claude-opus-4-8"):
     """Create launcher.sh in the workspace."""
     ws = HOME / name
     session = f"{name}-agent"
@@ -905,10 +905,11 @@ if [ -n "$PRO_TOKEN" ]; then
     # settings.json alone. With $CONTINUE_FLAG (--continue) a resumed session
     # keeps the model it was originally started on and IGNORES a changed
     # settings.json "model" field. The explicit --model flag overrides that,
-    # so model upgrades actually take effect on the next restart. Keep this
-    # in sync with the "model" field in settings.json.
+    # so model upgrades actually take effect on the next restart. It is pinned
+    # to the SAME model written into settings.json (the --model arg to this
+    # script), so the two never drift.
     $TMUX new-session -d -s "$SESSION" -c "/Users/YOUR_MAC_USERNAME/{name}" \\
-        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY CLAUDE_CODE_OAUTH_TOKEN=$PRO_TOKEN TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --model claude-opus-4-8 --dangerously-skip-permissions $CONTINUE_FLAG --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt '$APPEND_PROMPT'"
+        "env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN AGENT_NAME=$AGENT_NAME SUPABASE_URL=$SUPABASE_URL SUPABASE_SERVICE_KEY=$SUPABASE_SERVICE_KEY CLAUDE_CODE_OAUTH_TOKEN=$PRO_TOKEN TELEGRAM_STATE_DIR={channel_dir} $CLAUDE --model {model} --dangerously-skip-permissions $CONTINUE_FLAG --settings /Users/YOUR_MAC_USERNAME/{name}/settings.json --channels plugin:telegram@claude-plugins-official --append-system-prompt '$APPEND_PROMPT'"
 else
     infra_warn "$COMP" "Pro token expired or missing — falling back to API key (Sonnet)"
     $TMUX new-session -d -s "$SESSION" -c "/Users/YOUR_MAC_USERNAME/{name}" \\
@@ -1092,7 +1093,7 @@ def main():
 
     # 4. Create launcher
     print(f"[4/6] Creating launcher script...")
-    launcher = create_launcher(name, args.persona)
+    launcher = create_launcher(name, args.persona, args.model)
     print(f"  Created: {launcher}")
 
     # 5. Create and load plist
