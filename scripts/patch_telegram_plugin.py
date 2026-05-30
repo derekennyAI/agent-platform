@@ -70,6 +70,48 @@ OUTBOUND_LOG = '''        // outbound-log-v1: record what we actually sent so th
 
 '''
 
+# Send-only mode (send-only-v1). Telegram allows exactly ONE getUpdates consumer
+# per bot token. Scheduled `claude -p` one-shots run in an isolated -cron config
+# that still enables the telegram plugin (so the agent can deliver via the reply
+# tool) — but if that plugin POLLS, it steals the long-poll from the live
+# --channels session: server.ts SIGTERMs the live poller ("replacing stale
+# poller pid=N"), runs a few seconds, exits, and the live session is deaf until
+# claude respawns it. That contention was the real cause of Derek's flapping.
+# In send-only mode (env TELEGRAM_SEND_ONLY=1) the plugin still serves the reply
+# tool (bot.api.sendMessage, independent of polling) but never SIGTERMs the live
+# poller, never writes the shared bot.pid, and never starts the inbound poll loop.
+SENDONLY_STATIC_OLD = "const STATIC = process.env.TELEGRAM_ACCESS_MODE === 'static'"
+SENDONLY_STATIC_NEW = (
+    "const STATIC = process.env.TELEGRAM_ACCESS_MODE === 'static'\n"
+    "const SEND_ONLY = process.env.TELEGRAM_SEND_ONLY === '1' // send-only-v1: push one-shots send via reply but never poll"
+)
+SENDONLY_PID_OLD = '''try {
+  const stale = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
+  if (stale > 1 && stale !== process.pid) {
+    process.kill(stale, 0)
+    process.stderr.write(`telegram channel: replacing stale poller pid=${stale}\\n`)
+    process.kill(stale, 'SIGTERM')
+  }
+} catch {}
+writeFileSync(PID_FILE, String(process.pid))'''
+SENDONLY_PID_NEW = '''if (!SEND_ONLY) {
+  // send-only-v1: one-shots must not SIGTERM the live poller or clobber bot.pid
+  try {
+    const stale = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
+    if (stale > 1 && stale !== process.pid) {
+      process.kill(stale, 0)
+      process.stderr.write(`telegram channel: replacing stale poller pid=${stale}\\n`)
+      process.kill(stale, 'SIGTERM')
+    }
+  } catch {}
+  writeFileSync(PID_FILE, String(process.pid))
+}'''
+SENDONLY_IIFE_OLD = '''void (async () => {
+  for (let attempt = 1; ; attempt++) {'''
+SENDONLY_IIFE_NEW = '''void (async () => {
+  if (SEND_ONLY) { trace('send_only_no_poll'); return } // send-only-v1: never start the inbound poll loop
+  for (let attempt = 1; ; attempt++) {'''
+
 
 def patch_one(path: str) -> bool:
     """Patch one server.ts file. Returns True if changed."""
@@ -123,6 +165,14 @@ def patch_one(path: str) -> bool:
     # --- Patch 4: outbound message logging in the reply tool
     if "outbound-log-v1" not in content and OUTBOUND_ANCHOR in content:
         content = content.replace(OUTBOUND_ANCHOR, OUTBOUND_LOG + OUTBOUND_ANCHOR, 1)
+
+    # --- Patch 5: send-only mode (send-only-v1). Own marker/guard so it applies
+    # independently of the trace/outbound patches. Only proceeds when the STATIC
+    # anchor is present (so SEND_ONLY actually gets defined before it's used).
+    if "send-only-v1" not in content and SENDONLY_STATIC_OLD in content:
+        content = content.replace(SENDONLY_STATIC_OLD, SENDONLY_STATIC_NEW, 1)
+        content = content.replace(SENDONLY_PID_OLD, SENDONLY_PID_NEW, 1)
+        content = content.replace(SENDONLY_IIFE_OLD, SENDONLY_IIFE_NEW, 1)
 
     if content != original:
         Path(path).write_text(content)

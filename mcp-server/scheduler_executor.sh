@@ -108,17 +108,40 @@ with open('$agent_plist', 'rb') as f:
 " 2>/dev/null || true)
     fi
 
+    # Isolated config dir for push one-shots. Sharing CLAUDE_CONFIG_DIR with the
+    # live --channels session makes the concurrent `claude -p` contend over the
+    # live session's state and drops the telegram plugin's stdin, killing it —
+    # the watchdog then restarts the whole agent. A separate ...-cron dir removes
+    # that contention. Self-heal if missing.
+    local cron_cfg="$HOME/.claude-${agent}-cron"
+    if [ ! -f "$cron_cfg/.claude.json" ]; then
+        mkdir -p "$cron_cfg"
+        [ -f "$HOME/.claude-${agent}/.claude.json" ] && cp "$HOME/.claude-${agent}/.claude.json" "$cron_cfg/.claude.json"
+        [ -f "$HOME/.claude-${agent}/settings.json" ] && cp "$HOME/.claude-${agent}/settings.json" "$cron_cfg/settings.json"
+        # Seed the live dir's already-patched telegram plugin. Without this the
+        # one-shot finds no plugin, auto-installs a FRESH (unpatched) copy from
+        # the marketplace, and that copy ignores TELEGRAM_SEND_ONLY and polls —
+        # stealing the live --channels session's getUpdates slot (the bug this
+        # whole path exists to avoid). See patch_telegram_plugin.py (send-only-v1).
+        [ -d "$HOME/.claude-${agent}/plugins" ] && cp -R "$HOME/.claude-${agent}/plugins" "$cron_cfg/" 2>/dev/null || true
+    fi
+    # Belt-and-suspenders: re-apply the plugin patch to the cron dir in case the
+    # marketplace re-pulled an unpatched copy. The patcher globs every ~/.claude-*
+    # dir (incl. -cron) and is idempotent.
+    /opt/homebrew/bin/python3 "$HOME/agent-platform/scripts/patch_telegram_plugin.py" >/dev/null 2>&1 || true
+
     # Run in background — scheduler shouldn't block on claude's execution time
     (
         cd "$workspace"
         env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN \
             PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" \
             CLAUDE_CODE_OAUTH_TOKEN="$oauth_token" \
-            CLAUDE_CONFIG_DIR="$HOME/.claude-${agent}" \
+            CLAUDE_CONFIG_DIR="$cron_cfg" \
             AGENT_NAME="$agent" \
             SUPABASE_URL="$SUPABASE_URL" \
             SUPABASE_SERVICE_KEY="$SUPABASE_KEY" \
             ${tg_state_dir:+TELEGRAM_STATE_DIR="$tg_state_dir"} \
+            TELEGRAM_SEND_ONLY=1 \
             "$CLAUDE_BIN" -p "SCHEDULED TASK [$tid]: $desc" \
             --dangerously-skip-permissions \
             --mcp-config "$mcp_config" \
