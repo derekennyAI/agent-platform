@@ -544,8 +544,13 @@ echo "$TASK_OUTPUT" | while IFS='|' read -r idx tid agent schedule recurring tri
             continue
         fi
 
-        # Fire the task
-        if $TMUX_BIN send-keys -t "$session" "SCHEDULED TASK [$tid]: $desc" Enter 2>/dev/null; then
+        # Fire the task. Append a terse reply-tool reminder (reply-drift prevention,
+        # 2026-06-02): long sessions can drift off calling the telegram reply tool and
+        # go outbound-silent. Rides the existing send-keys path (no new line, so
+        # flood-counting is unchanged) and naturally reaches busy/at-risk agents.
+        # ASCII-only to keep send-keys safe.
+        REPLY_REMINDER="(reminder: to message the user you must call the mcp__plugin_telegram_telegram__reply tool; plain text is not delivered)"
+        if $TMUX_BIN send-keys -t "$session" "SCHEDULED TASK [$tid]: $desc $REPLY_REMINDER" Enter 2>/dev/null; then
             infra_info "$COMP" "FIRED $tid ($agent): ${desc:0:80}"
             agent_cooldown_set "$agent"
             FIRED=$((FIRED + 1))

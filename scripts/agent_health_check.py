@@ -58,6 +58,7 @@ def _build_agents():
             "workspace": ws,
             "daemon_log": daemon_log,
             "credentials": creds,
+            "config_dir": cfg.get("config_dir"),
             "auto_restart": cfg.get("auto_restart", True),
             "max_consecutive_down": cfg.get("max_consecutive_down", 2),
         })
@@ -577,6 +578,7 @@ def record_restart(agent_state, now):
 def record_healthy(agent_state):
     """Reset consecutive restart counter when agent is confirmed healthy."""
     agent_state["consecutive_restarts_without_recovery"] = 0
+    agent_state["drift_remediations_without_recovery"] = 0
 
 
 def restart_agent(agent):
@@ -610,6 +612,274 @@ def restart_agent(agent):
         return True
     except Exception:
         return False
+
+
+# ──────────────────────────────────────────────────────────────
+# Reply-drift detection (2026-06-02)
+# ──────────────────────────────────────────────────────────────
+# The telegram channel plugin requires the model to EXPLICITLY call the
+# mcp__plugin_telegram_telegram__reply tool to reach the user — plain assistant
+# text never leaves the machine. In a long --continue-resumed session the model
+# can DRIFT and stop calling that tool: it still RECEIVES inbound fine but answers
+# as plain text, so the user sees a dead agent. No other check catches this (they
+# verify the process is alive and receiving, never that it's sending).
+#
+# Signal = the transcript tail, NOT sent-messages.jsonl. sent-messages.jsonl is
+# confounded: scheduled one-shots (send-only mode) write to it even while the live
+# interactive session is drifted, masking the problem.
+REPLY_TOOL_NAMES = (
+    "mcp__plugin_telegram_telegram__reply",
+    "mcp__plugin_telegram_telegram__react",
+)
+DRIFT_INBOUND_MIN_AGE_MIN = 8     # last inbound must be at least this old to judge
+DRIFT_QUIET_SECS = 120            # skip if a turn may still be in flight
+# Flag when the last N inbounds are all DRIFT. =1: the user's most recent message
+# (8+ min old, turn settled) was composed-but-not-delivered (text, no reply tool).
+# The "neither text nor reply -> not drift" guard + the age/quiet gates + the
+# 120-min remediation cooldown keep a transient single miss cheap and self-correcting.
+DRIFT_CONSECUTIVE = 1
+DRIFT_REMEDIATION_COOLDOWN_MIN = 120
+MAX_DRIFT_REMEDIATIONS = 2        # consecutive auto-fixes before escalating to admin
+DRIFT_TAIL_RECORDS = 400
+
+
+def _newest_transcript(config_dir):
+    """Newest *.jsonl under <config_dir>/projects/ (excluding archive dirs)."""
+    if not config_dir:
+        return None
+    proj = os.path.join(os.path.expanduser(config_dir), "projects")
+    if not os.path.isdir(proj):
+        return None
+    newest, newest_mtime = None, -1
+    for root, dirs, files in os.walk(proj):
+        if "archive" in root:
+            continue
+        for fn in files:
+            if fn.endswith(".jsonl"):
+                p = os.path.join(root, fn)
+                try:
+                    m = os.path.getmtime(p)
+                except OSError:
+                    continue
+                if m > newest_mtime:
+                    newest, newest_mtime = p, m
+    return newest
+
+
+def _record_text_and_replytool(rec):
+    """For one transcript record, return (has_user_text, has_reply_tool)."""
+    has_text = has_reply = False
+    msg = rec.get("message")
+    if not isinstance(msg, dict):
+        return has_text, has_reply
+    content = msg.get("content")
+    if isinstance(content, str):
+        return (bool(content.strip()), False)
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            bt = b.get("type")
+            if bt == "text" and b.get("text", "").strip():
+                has_text = True
+            elif bt == "tool_use" and b.get("name") in REPLY_TOOL_NAMES:
+                has_reply = True
+    return has_text, has_reply
+
+
+def _parse_ts(s):
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def detect_reply_drift(agent):
+    """Detect 'receiving channel messages but not calling the reply tool'.
+    Returns (drifted: bool, reason: str, signals: dict). Read-only.
+    Classifies assistant activity after each of the last DRIFT_CONSECUTIVE inbound
+    channel messages: a span with a user-facing text block but NO reply tool_use =
+    DRIFT; a span with a reply tool_use = HEALTHY; a span with neither (only other
+    tools, or empty) = in-progress/not-drift (false-positive guard)."""
+    import re as _re
+    tx = _newest_transcript(agent.get("config_dir"))
+    if not tx:
+        return False, "no_transcript", {}
+    try:
+        with open(tx) as f:
+            lines = f.read().splitlines()[-DRIFT_TAIL_RECORDS:]
+    except Exception as e:
+        return False, f"read_error:{e}", {}
+
+    recs = []
+    for ln in lines:
+        try:
+            recs.append(json.loads(ln))
+        except Exception:
+            continue
+    if not recs:
+        return False, "empty", {}
+
+    now = datetime.now(timezone.utc)
+
+    last_ts = None
+    for r in reversed(recs):
+        last_ts = _parse_ts(r.get("timestamp"))
+        if last_ts:
+            break
+    if last_ts and (now - last_ts).total_seconds() < DRIFT_QUIET_SECS:
+        return False, "too_fresh_quiet", {}
+
+    def is_inbound(r):
+        if r.get("type") != "user":
+            return False
+        msg = r.get("message", {})
+        c = msg.get("content") if isinstance(msg, dict) else None
+        # json.dumps escapes inner quotes (=" -> =\"); match quote-independent substrings.
+        blob = json.dumps(c) if c is not None else ""
+        return ("channel source" in blob) and ("plugin:telegram" in blob)
+
+    inbound_idx = [i for i, r in enumerate(recs) if is_inbound(r)]
+    if len(inbound_idx) < DRIFT_CONSECUTIVE:
+        return False, "insufficient_inbound", {"inbound_count": len(inbound_idx)}
+
+    last_in = recs[inbound_idx[-1]]
+    inner = None
+    try:
+        blob = json.dumps(last_in.get("message", {}).get("content"))
+        m = _re.search(r'\bts="([^"]+)"', blob)
+        if m:
+            inner = _parse_ts(m.group(1))
+    except Exception:
+        pass
+    last_in_ts = inner or _parse_ts(last_in.get("timestamp"))
+    if last_in_ts and (now - last_in_ts).total_seconds() < DRIFT_INBOUND_MIN_AGE_MIN * 60:
+        return False, "last_inbound_too_fresh", {}
+
+    take = inbound_idx[-DRIFT_CONSECUTIVE:]
+    bounds = take + [len(recs)]
+    verdicts = []
+    for k in range(DRIFT_CONSECUTIVE):
+        start = bounds[k] + 1
+        end = bounds[k + 1]
+        span_text = span_reply = False
+        for r in recs[start:end]:
+            if r.get("type") != "assistant":
+                continue
+            t, rep = _record_text_and_replytool(r)
+            span_text = span_text or t
+            span_reply = span_reply or rep
+        if span_reply:
+            verdicts.append("healthy")
+        elif span_text:
+            verdicts.append("drift")
+        else:
+            verdicts.append("inprogress")
+
+    drifted = all(v == "drift" for v in verdicts)
+    signals = {
+        "transcript": tx,
+        "verdicts": verdicts,
+        "inbound_count": len(inbound_idx),
+        "last_inbound_ts": last_in_ts.isoformat() if last_in_ts else None,
+    }
+    reason = "reply_drift" if drifted else "ok:" + ",".join(verdicts)
+    return drifted, reason, signals
+
+
+def drift_recently_remediated(agent_state):
+    last = agent_state.get("last_drift_remediation")
+    if not last:
+        return False
+    try:
+        mins = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() / 60
+        return mins < DRIFT_REMEDIATION_COOLDOWN_MIN
+    except Exception:
+        return False
+
+
+def drift_remediation_blocked(agent_state):
+    return agent_state.get("drift_remediations_without_recovery", 0) >= MAX_DRIFT_REMEDIATIONS
+
+
+def reply_drift_recently_alerted(agent_name):
+    p = os.path.join(HEALTH_ALERT_DIR, f"{agent_name}.reply_drift")
+    if not os.path.exists(p):
+        return False
+    try:
+        return (time.time() - os.path.getmtime(p)) < HEALTH_ALERT_DEDUPE_SECS
+    except Exception:
+        return False
+
+
+def mark_reply_drift_alerted(agent_name):
+    p = os.path.join(HEALTH_ALERT_DIR, f"{agent_name}.reply_drift")
+    try:
+        open(p, "w").close()
+        os.utime(p, None)
+    except Exception:
+        pass
+
+
+def remediate_reply_drift(agent, agent_state, now, signals):
+    """Archive the drifted session transcripts (move, never delete) so the launcher
+    boots a FRESH session, then restart. Returns True on restart."""
+    name = agent["name"]
+    config_dir = os.path.expanduser(agent.get("config_dir") or "")
+    proj = os.path.join(config_dir, "projects")
+    if not os.path.isdir(proj):
+        return False
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    # Archive as a SIBLING of projects/ (matches prune_session_if_bloated), so the
+    # launcher's recursive find over projects/ can't see it and the next boot is fresh.
+    archive = os.path.join(config_dir, f"projects-archive-{ts}-drift")
+    try:
+        os.makedirs(archive, exist_ok=True)
+        moved = 0
+        for root, dirs, files in os.walk(proj):
+            if "archive" in root:
+                continue
+            for fn in files:
+                if fn.endswith(".jsonl"):
+                    src = os.path.join(root, fn)
+                    try:
+                        os.rename(src, os.path.join(archive, fn))
+                        moved += 1
+                    except OSError:
+                        pass
+        if moved == 0:
+            return False
+    except Exception as e:
+        log_to_supabase("ERROR", f"agent:{name}", f"reply-drift archive failed: {e}", {})
+        return False
+
+    restarted = restart_agent(agent)
+    if restarted:
+        record_restart(agent_state, now)
+        agent_state["last_drift_remediation"] = now
+        agent_state["drift_remediations_without_recovery"] = (
+            agent_state.get("drift_remediations_without_recovery", 0) + 1
+        )
+        log_to_supabase("WARNING", f"agent:{name}",
+            f"reply-drift detected — archived {moved} transcript(s) + fresh restart", {
+                "archive": archive, "signals": signals,
+            })
+    else:
+        create_admin_task(
+            action=ta.FIX_AGENT_DOWN,
+            agent_name=name,
+            reason="reply-drift detected; transcript archived but auto-restart failed",
+            instructions=(
+                f"Agent {name} stopped calling the telegram reply tool (outbound dead). "
+                f"Its drifted transcript was archived to {archive} but the launchctl restart "
+                f"failed. Manually reload its plist; the launcher will boot a fresh session."
+            ),
+        )
+        log_to_supabase("ERROR", f"agent:{name}",
+            "reply-drift: archived transcript but restart failed — tasked admin", {"archive": archive})
+    return restarted
 
 
 def run_health_check():
@@ -892,6 +1162,43 @@ def run_health_check():
                     )
                     log_to_supabase("WARNING", f"agent:{name}",
                         f"OAuth correction failed for {name} — tasked Derek")
+
+            # Reply-drift: agent receives channel messages but stopped calling the
+            # reply tool (outbound dead). Detected from the transcript tail. Detect
+            # for ALL agents (visibility); auto-remediate only auto-restartable ones.
+            try:
+                drifted, drift_reason, drift_signals = detect_reply_drift(agent)
+            except Exception as e:
+                drifted, drift_reason, drift_signals = False, f"detect_error:{e}", {}
+            if drifted:
+                result["reply_drift"] = True
+                if name not in AUTO_RESTART_AGENTS:
+                    if not reply_drift_recently_alerted(name):
+                        log_to_supabase("WARNING", f"agent:{name}",
+                            "reply-drift detected (not auto-restartable) — manual fresh restart needed",
+                            {"signals": drift_signals})
+                        create_admin_task(ta.FIX_AGENT_DOWN, name,
+                            "reply-drift: stopped calling telegram reply tool (outbound dead)",
+                            (f"Agent {name} receives Telegram but no longer calls the reply tool. "
+                             f"Archive its CLAUDE_CONFIG_DIR/projects/*.jsonl and restart so it boots "
+                             f"a fresh session (launcher auto-detects empty projects/)."))
+                        mark_reply_drift_alerted(name)
+                    result["action_taken"] = "reply_drift_escalated"
+                elif recently_restarted(agent_state) or drift_recently_remediated(agent_state):
+                    result["action_taken"] = "reply_drift_cooldown"
+                elif drift_remediation_blocked(agent_state):
+                    if not reply_drift_recently_alerted(name):
+                        create_admin_task(ta.FIX_AGENT_DOWN, name,
+                            f"reply-drift recurring — {agent_state.get('drift_remediations_without_recovery',0)} fresh restarts without recovery",
+                            (f"Agent {name} keeps drifting off the telegram reply tool even after "
+                             f"{agent_state.get('drift_remediations_without_recovery',0)} fresh-session restarts. "
+                             f"Investigate root cause (context size, startup-instructions.md, MCP)."))
+                        mark_reply_drift_alerted(name)
+                        send_telegram(f"⚠️ {name}: reply-drift recurring after auto-fixes — needs investigation.")
+                    result["action_taken"] = "reply_drift_escalated"
+                else:
+                    ok = remediate_reply_drift(agent, agent_state, now, drift_signals)
+                    result["action_taken"] = "reply_drift_remediated" if ok else "reply_drift_remediation_failed"
 
         state[name] = agent_state
         results.append(result)
