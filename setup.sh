@@ -99,7 +99,7 @@ echo "[4/7] Setting up Supabase database..."
 
 # Check if tables already exist by querying one
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    "${SUPABASE_URL}/rest/v1/harness_skills?select=id&limit=1" \
+    "${SUPABASE_URL}/rest/v1/agents?select=id&limit=1" \
     -H "apikey: ${SUPABASE_SERVICE_KEY}" \
     -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" 2>/dev/null)
 

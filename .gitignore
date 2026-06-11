@@ -36,3 +36,10 @@ Thumbs.db
 reports/*.html
 *.tmp
 *.bak
+
+# Runtime/PII artifacts (real registry, runner logs) — keep the .example template only
+skills/agent-setup/agents.json
+**/agents.json
+!skills/agent-setup/agents.example.json
+liability_accepted.json
+**/audit.log

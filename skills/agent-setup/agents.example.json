@@ -1,0 +1,25 @@
+{
+  "agents": {
+    "myagent": {
+      "name": "myagent",
+      "persona": "Assistant",
+      "human": "Your Name",
+      "telegram_bot": "@YourBot",
+      "user_id": "000000000",
+      "timezone": "America/Los_Angeles",
+      "model": "claude-opus-4-8[1m]",
+      "workspace": "/Users/YOUR_MAC_USERNAME/myagent",
+      "config_dir": "/Users/YOUR_MAC_USERNAME/.claude-myagent",
+      "tmux_session": "myagent-agent",
+      "daemon_label": "com.myagent-agent.daemon",
+      "plist": "/Users/YOUR_MAC_USERNAME/Library/LaunchAgents/com.myagent-agent.daemon.plist",
+      "greeting": "myagent online.",
+      "has_pro_token": true,
+      "escalate_token_failure": true,
+      "auto_restart": true,
+      "max_consecutive_down": 2,
+      "role": "sub",
+      "created": "2026-01-01T00:00:00-08:00"
+    }
+  }
+}
