@@ -287,6 +287,11 @@ server.tool(
       };
     }
 
+    try {
+      const cross = targetAgent !== AGENT_NAME;
+      console.error(`[CRED-AUDIT] ${new Date().toISOString()} actor=${AGENT_NAME} target=${targetAgent} service=${service} key=${key}${cross ? " CROSS-AGENT" : ""}`);
+    } catch { /* never let auditing break a read */ }
+
     const creds = await supabaseQuery("agent_credentials", "GET", {
       "agent_name": `eq.${targetAgent}`,
       "service": `eq.${service}`,
@@ -668,7 +673,7 @@ server.tool(
     let catalog = [];
     if (skillNames.length > 0) {
       catalog = await supabaseQuery("skills", "GET", {
-        "name": `in.(${skillNames.join(",")})`,
+        "name": `in.(${skillNames.map(n => `"${String(n).replace(/"/g, "")}"`).join(",")})`,
         "select": "name,description,category,script_path,requires_credentials",
       }) || [];
     }
@@ -2057,7 +2062,7 @@ server.tool(
     const label = cfg.daemon_label;
     try {
       const target = launchctlUserTarget(label);
-      execSync(`/bin/launchctl kickstart -k ${target}`, { encoding: "utf8" });
+      execFileSync("/bin/launchctl", ["kickstart", "-k", target], { encoding: "utf8" });
       return {
         content: [{ type: "text", text: JSON.stringify({
           success: true,
@@ -2090,7 +2095,7 @@ server.tool(
 
     try {
       const target = launchctlUserTarget(cfg.daemon_label);
-      execSync(`/bin/launchctl bootout ${target}`, { encoding: "utf8", stdio: "pipe" });
+      execFileSync("/bin/launchctl", ["bootout", target], { encoding: "utf8", stdio: "pipe" });
     } catch {
       // bootout often exits non-zero even on success; don't treat as fatal
     }
@@ -2129,8 +2134,8 @@ server.tool(
     if (!cfg) return { content: [{ type: "text", text: `Unknown agent: ${target_agent}` }] };
 
     try {
-      const uid = execSync("/usr/bin/id -u", { encoding: "utf8" }).trim();
-      execSync(`/bin/launchctl bootstrap gui/${uid} "${cfg.plist}"`, { encoding: "utf8" });
+      const uid = execFileSync("/usr/bin/id", ["-u"], { encoding: "utf8" }).trim();
+      execFileSync("/bin/launchctl", ["bootstrap", `gui/${uid}`, cfg.plist], { encoding: "utf8" });
       return {
         content: [{ type: "text", text: JSON.stringify({
           success: true, agent: target_agent, action: "resumed",

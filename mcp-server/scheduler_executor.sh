@@ -16,9 +16,9 @@ COMP="scheduler"
 if [ -z "$SUPABASE_SERVICE_KEY" ]; then
     _PLIST="$HOME/Library/LaunchAgents/com.admin-agent.daemon.plist"
     if [ -f "$_PLIST" ]; then
-        _ENV_EXPORTS=$(python3 << PYEOF
-import plistlib, shlex
-with open("$_PLIST", "rb") as f:
+        _ENV_EXPORTS=$(_PLIST="$_PLIST" python3 << 'PYEOF'
+import os, plistlib, shlex
+with open(os.environ["_PLIST"], "rb") as f:
     env = plistlib.load(f).get("EnvironmentVariables", {})
 for k in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY"):
     if k in env:
@@ -135,16 +135,20 @@ with open('$agent_plist', 'rb') as f:
             if [ -z "$SUPABASE_KEY" ]; then
                 infra_error "$COMP" "PUSH $tid ($agent): SUPABASE_SERVICE_KEY empty in scheduler env — last_fired_at writeback to Supabase will be SKIPPED (column will rot, staleness alerts will fire). Check $HOME/Library/LaunchAgents/com.admin-agent.daemon.plist exists and has the key."
             fi
-            /opt/homebrew/bin/python3 - <<PYEOF >> "$push_log" 2>&1
+            TID="$tid" TASKS_FILE="$TASKS_FILE" SUPABASE_SERVICE_KEY="$SUPABASE_KEY" SUPABASE_URL="$SUPABASE_URL" \
+            /opt/homebrew/bin/python3 - <<'PYEOF' >> "$push_log" 2>&1
 import json, os, urllib.request
+from urllib.parse import quote
 from datetime import datetime, timezone
 now = datetime.now(timezone.utc).isoformat()
+tid = os.environ.get("TID", "")
+tasks_file = os.environ.get("TASKS_FILE", "")
 svc = os.environ.get("SUPABASE_SERVICE_KEY", "")
 base = os.environ.get("SUPABASE_URL", "https://YOUR_SUPABASE_PROJECT_ID.supabase.co")
-if svc:
+if svc and tid:
     try:
         req = urllib.request.Request(
-            f"{base}/rest/v1/scheduled_tasks?id=eq.$tid",
+            f"{base}/rest/v1/scheduled_tasks?id=eq.{quote(tid, safe='')}",
             data=json.dumps({"last_fired_at": now}).encode(),
             method="PATCH",
             headers={"apikey": svc, "Authorization": f"Bearer {svc}",
@@ -152,15 +156,16 @@ if svc:
         urllib.request.urlopen(req, timeout=5)
     except Exception as e:
         print(f"  [Phase 1.2] last_fired_at Supabase patch failed: {e}")
-try:
-    with open("$TASKS_FILE") as f: tasks = json.load(f)
-    for t in tasks:
-        if t.get("id") == "$tid":
-            t["last_fired_at"] = now
-            break
-    with open("$TASKS_FILE", "w") as f: json.dump(tasks, f, indent=2)
-except Exception as e:
-    print(f"  [Phase 1.2] local cache update failed: {e}")
+if tasks_file:
+    try:
+        with open(tasks_file) as f: tasks = json.load(f)
+        for t in tasks:
+            if t.get("id") == tid:
+                t["last_fired_at"] = now
+                break
+        with open(tasks_file, "w") as f: json.dump(tasks, f, indent=2)
+    except Exception as e:
+        print(f"  [Phase 1.2] local cache update failed: {e}")
 PYEOF
         fi
     ) &
@@ -550,22 +555,25 @@ echo "$TASK_OUTPUT" | while IFS='|' read -r idx tid agent schedule recurring tri
         fi
 
         # Update last_fired_at — Supabase is source of truth, local JSON is cache
-        python3 -c "
+        TID="$tid" RECURRING="$recurring" TASKS_FILE="$TASKS_FILE" SUPABASE_SERVICE_KEY="$SUPABASE_KEY" SUPABASE_URL="$SUPABASE_URL" \
+        python3 - <<'PYEOF' 2>/dev/null
 import json, urllib.request, urllib.error, os
+from urllib.parse import quote
 from datetime import datetime, timezone
 
 now = datetime.now(timezone.utc).isoformat()
-tid = '$tid'
-recurring = '$recurring'
+tid = os.environ.get('TID', '')
+recurring = os.environ.get('RECURRING', '')
+tasks_file = os.environ.get('TASKS_FILE', '')
 deactivate = recurring.lower() == 'false'
 
 svc_key = os.environ.get('SUPABASE_SERVICE_KEY', '')
 base_url = os.environ.get('SUPABASE_URL', 'https://YOUR_SUPABASE_PROJECT_ID.supabase.co')
 
 # Primary: Update Supabase
-if svc_key:
+if svc_key and tid:
     try:
-        url = f'{base_url}/rest/v1/scheduled_tasks?id=eq.{tid}'
+        url = f'{base_url}/rest/v1/scheduled_tasks?id=eq.{quote(tid, safe="")}'
         body = json.dumps({'last_fired_at': now} | ({'active': False} if deactivate else {})).encode()
         req = urllib.request.Request(url, data=body, method='PATCH', headers={
             'apikey': svc_key, 'Authorization': f'Bearer {svc_key}',
@@ -576,20 +584,21 @@ if svc_key:
         pass
 
 # Cache: Update local JSON
-try:
-    with open('$TASKS_FILE') as f:
-        tasks = json.load(f)
-    for task in tasks:
-        if task['id'] == tid:
-            task['last_fired_at'] = now
-            if deactivate:
-                task['active'] = False
-            break
-    with open('$TASKS_FILE', 'w') as f:
-        json.dump(tasks, f, indent=2)
-except Exception:
-    pass
-" 2>/dev/null
+if tasks_file:
+    try:
+        with open(tasks_file) as f:
+            tasks = json.load(f)
+        for task in tasks:
+            if task['id'] == tid:
+                task['last_fired_at'] = now
+                if deactivate:
+                    task['active'] = False
+                break
+        with open(tasks_file, 'w') as f:
+            json.dump(tasks, f, indent=2)
+    except Exception:
+        pass
+PYEOF
     fi
 done
 

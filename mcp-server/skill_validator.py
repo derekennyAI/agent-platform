@@ -79,9 +79,10 @@ ALLOWED_FILES = {
     "analytics_server.py",  # OAuth callback server
     "create_agent.py",  # agent creation template
     "switch_account.py",  # OAuth flow handler
-    "refresh_all_agents.sh",  # token refresh script
     "gmail_connect.py",  # OAuth setup script — needs client secret to initiate flow
-    "scheduler_executor.sh",  # scheduler needs Supabase key to execute skills
+    # Removed refresh_all_agents.sh and scheduler_executor.sh: they hold no secret
+    # literals and the basename-based exemption was bypassable (any file with a
+    # matching basename would be skipped).
 }
 
 

@@ -25,6 +25,12 @@ Environment:
 import json
 import os
 import urllib.request
+import urllib.parse
+
+
+def _q(v):
+    return urllib.parse.quote(str(v), safe="")
+
 
 SUPABASE_URL = "https://YOUR_SUPABASE_PROJECT_ID.supabase.co"
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
@@ -50,14 +56,14 @@ def get_credential(service, key, agent=None, with_metadata=False):
 
     url = (
         f"{SUPABASE_URL}/rest/v1/agent_credentials"
-        f"?agent_name=eq.{target}&service=eq.{service}&credential_key=eq.{key}"
+        f"?agent_name=eq.{_q(target)}&service=eq.{_q(service)}&credential_key=eq.{_q(key)}"
         f"&select=credential_value,metadata"
     )
     req = urllib.request.Request(url, headers={
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     })
-    resp = urllib.request.urlopen(req)
+    resp = urllib.request.urlopen(req, timeout=10)
     rows = json.loads(resp.read())
     if not rows:
         return None
@@ -72,14 +78,14 @@ def get_credentials(service, agent=None):
     target = agent or AGENT_NAME
     url = (
         f"{SUPABASE_URL}/rest/v1/agent_credentials"
-        f"?agent_name=eq.{target}&service=eq.{service}"
+        f"?agent_name=eq.{_q(target)}&service=eq.{_q(service)}"
         f"&select=credential_key,credential_value,metadata"
     )
     req = urllib.request.Request(url, headers={
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     })
-    resp = urllib.request.urlopen(req)
+    resp = urllib.request.urlopen(req, timeout=10)
     rows = json.loads(resp.read())
     result = {}
     for row in rows:
@@ -98,14 +104,14 @@ def load_secrets(agent=None):
     target = agent or AGENT_NAME
     url = (
         f"{SUPABASE_URL}/rest/v1/agent_credentials"
-        f"?agent_name=eq.{target}"
+        f"?agent_name=eq.{_q(target)}"
         f"&select=service,credential_key,credential_value,metadata"
     )
     req = urllib.request.Request(url, headers={
         "apikey": SUPABASE_SERVICE_KEY,
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
     })
-    resp = urllib.request.urlopen(req)
+    resp = urllib.request.urlopen(req, timeout=10)
     rows = json.loads(resp.read())
     result = {}
     for row in rows:

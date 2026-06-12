@@ -216,8 +216,19 @@ class OAuthHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path == "/exchange":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                self._json_response({"success": False, "error": "Invalid Content-Length"})
+                return
+            if length <= 0 or length > 65536:
+                self._json_response({"success": False, "error": "Invalid request body length"})
+                return
+            try:
+                body = json.loads(self.rfile.read(length))
+            except (ValueError, json.JSONDecodeError):
+                self._json_response({"success": False, "error": "Invalid JSON body"})
+                return
             code = body.get("code", "").strip().split("#")[0]
 
             if not code:
@@ -259,7 +270,8 @@ def main():
     verifier, challenge, state = generate_pkce()
     auth_url = build_auth_url(challenge, state)
 
-    server = http.server.HTTPServer(("0.0.0.0", args.port), OAuthHandler)
+    # Bind loopback only — 0.0.0.0 exposed the token-exchange endpoint to the LAN.
+    server = http.server.HTTPServer(("127.0.0.1", args.port), OAuthHandler)
     server.auth_url = auth_url
     server.verifier = verifier
     server.agent_name = args.agent
