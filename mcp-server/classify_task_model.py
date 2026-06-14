@@ -98,6 +98,27 @@ def main():
     if not args:
         sys.exit(__doc__)
 
+    if args[0] == "--resolve":
+        # --resolve <tid> <desc...> : the scheduler's per-fire lookup. Returns
+        # the task's model in one call — map entry if present, else classify the
+        # description on the fly (self-heal for chat-created tasks), else the safe
+        # default. Prints "<source> <model>" (source: mapped|classified|default)
+        # so the caller can log auto-classification without re-deriving anything.
+        tid = args[1] if len(args) > 1 else ""
+        desc = " ".join(args[2:])
+        out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "task_models.json")
+        try:
+            mapped = json.load(open(out)).get(tid, "")
+        except Exception:
+            mapped = ""
+        if mapped:
+            print(f"mapped {mapped}")
+        elif desc:
+            print(f"classified {classify(desc)}")
+        else:
+            print(f"default {OPUS}")
+        return
+
     if args[0] == "--map":
         dry = "--dry-run" in args
         rows = _supabase_tasks()
@@ -110,7 +131,7 @@ def main():
             mapping[tid] = model
             counts[model] += 1
             short = " ".join((row.get("task_description") or "").split())[:60]
-            tier = {HAIKU: "HAIKU ", SONNET: "SONNET", OPUS: "OPUS  "}[model]
+            tier = model.split("-")[1].upper().ljust(6)  # HAIKU / SONNET / OPUS
             print(f"{row['agent_name']:9} {tier} {tid[:34]:36} {short}", file=sys.stderr)
         print(f"\nTOTAL {len(rows)}  ->  HAIKU {counts[HAIKU]}  SONNET {counts[SONNET]}  OPUS {counts[OPUS]}",
               file=sys.stderr)

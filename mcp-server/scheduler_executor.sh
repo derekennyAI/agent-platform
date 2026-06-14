@@ -131,31 +131,19 @@ with open('$agent_plist', 'rb') as f:
     /opt/homebrew/bin/python3 "$HOME/agent-platform/scripts/patch_telegram_plugin.py" >/dev/null 2>&1 || true
 
     # Per-task model tiering: each scheduled task runs on the cheapest model that
-    # won't degrade it (haiku/sonnet/opus), mapped in task_models.json (tid ->
-    # model id). Lives in $SCRIPT_DIR so the Supabase->local scheduled_tasks.json
-    # sync never clobbers it. tid is passed as argv (not interpolated) to avoid
-    # id-injection, matching the writeback block below. See classify_task_model.py.
-    local task_model
-    task_model=$(/opt/homebrew/bin/python3 -c "
-import json, os, sys
-tid = sys.argv[1]
-p = os.path.join('$SCRIPT_DIR', 'task_models.json')
-try:
-    print(json.load(open(p)).get(tid, ''))
-except Exception:
-    print('')
-" "$tid" 2>/dev/null)
-    if [ -z "$task_model" ]; then
-        # Unmapped task (e.g. one just created from chat) — classify on the fly
-        # from its description so it auto-tiers with no manual --map run. This is
-        # what closes the chat -> scheduled-task -> tiered-fire loop. Falls back
-        # to OPUS if the classifier is unavailable. No write-back here: the fire
-        # path can run concurrently for several tasks and would race on the file;
-        # a periodic/weekly --map persists the map for the record instead.
-        task_model=$(/opt/homebrew/bin/python3 "$SCRIPT_DIR/classify_task_model.py" "$desc" 2>/dev/null)
-        [ -n "$task_model" ] && infra_info "$COMP" "PUSH_MODEL_AUTOCLASSIFIED $tid ($agent): $task_model"
-    fi
-    [ -z "$task_model" ] && task_model="claude-opus-4-8"
+    # won't degrade it (haiku/sonnet/opus). classify_task_model.py --resolve does
+    # it all in one call: map entry from task_models.json if present, else classify
+    # the description on the fly (self-heal for chat-created tasks — closes the
+    # chat->tiered-fire loop), else the safe OPUS default (never silently downgrade
+    # something unmapped). It prints "<source> <model>"; source=classified means it
+    # auto-tiered. tid passed as argv (not interpolated) to avoid id-injection.
+    local task_resolve task_src task_model
+    task_resolve=$(/opt/homebrew/bin/python3 "$SCRIPT_DIR/classify_task_model.py" --resolve "$tid" "$desc" 2>/dev/null)
+    # Empty only if the classifier itself failed to run — fall back to OPUS.
+    [ -z "$task_resolve" ] && task_resolve="default claude-opus-4-8"
+    task_src=${task_resolve%% *}
+    task_model=${task_resolve#* }
+    [ "$task_src" = "classified" ] && infra_info "$COMP" "PUSH_MODEL_AUTOCLASSIFIED $tid ($agent): $task_model"
     infra_info "$COMP" "PUSH_MODEL $tid ($agent): $task_model"
 
     # Reliable Telegram send for one-shots: the MCP telegram plugin cold-starts
