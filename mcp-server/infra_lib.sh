@@ -128,6 +128,12 @@ infra_error_user_tier() {
 # Usage: prune_session_if_bloated "$CLAUDE_CONFIG_DIR" "$COMP"
 MAX_SESSION_AGE_DAYS="${MAX_SESSION_AGE_DAYS:-2}"
 MAX_SESSION_BYTES="${MAX_SESSION_BYTES:-52428800}"  # 50 MB safety net
+# Per-session line cap (2026-06-02). Long --continue-resumed sessions can DRIFT —
+# the model stops calling the telegram reply tool and goes outbound-silent. This
+# loose backstop archives an oversized single session so the next boot is fresh,
+# bounding drift accumulation independently of the age/byte guards. Detection +
+# auto-fix lives in scripts/agent_health_check.py (detect_reply_drift).
+MAX_SESSION_LINES="${MAX_SESSION_LINES:-6000}"
 prune_session_if_bloated() {
     local config_dir="$1" comp="$2"
     local projects_dir="$config_dir/projects"
@@ -143,6 +149,26 @@ prune_session_if_bloated() {
         echo "$old_files" | while IFS= read -r f; do mv "$f" "$archive/" 2>/dev/null; done
         count=$(find "$archive" -name "*.jsonl" -type f 2>/dev/null | wc -l | tr -d ' ')
         infra_info "$comp" "Session pruned: archived $count files older than ${MAX_SESSION_AGE_DAYS}d"
+    fi
+
+    # Phase 1.5: per-session line cap — archive any single session exceeding
+    # MAX_SESSION_LINES (drift backstop). Archive is a sibling of projects/ so the
+    # launcher's recursive find can't see it (next boot is fresh).
+    if [ "${MAX_SESSION_LINES:-0}" -gt 0 ]; then
+        local lc_archive="$config_dir/projects-archive-$(date +%Y%m%d%H%M%S)-overlong"
+        local lc_count=0
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            local n
+            n=$(wc -l < "$f" 2>/dev/null | tr -d ' ')
+            if [ -n "$n" ] && [ "$n" -gt "$MAX_SESSION_LINES" ]; then
+                mkdir -p "$lc_archive"
+                mv "$f" "$lc_archive/" 2>/dev/null && lc_count=$((lc_count + 1))
+            fi
+        done < <(find "$projects_dir" -name "*.jsonl" -type f 2>/dev/null)
+        if [ "$lc_count" -gt 0 ]; then
+            infra_warn "$comp" "Session pruned (overlong): archived $lc_count session(s) exceeding ${MAX_SESSION_LINES} lines — drift backstop, next boot fresh"
+        fi
     fi
 
     # Phase 2: safety net — if remaining files still exceed size limit, archive all
