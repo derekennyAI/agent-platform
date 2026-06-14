@@ -158,6 +158,15 @@ except Exception:
     [ -z "$task_model" ] && task_model="claude-opus-4-8"
     infra_info "$COMP" "PUSH_MODEL $tid ($agent): $task_model"
 
+    # Reliable Telegram send for one-shots: the MCP telegram plugin cold-starts
+    # per claude -p run and a fast model (haiku) can finish before it connects,
+    # concluding "tool not available" and never sending. tg_send.py goes straight
+    # through the Bot API (token from $TELEGRAM_STATE_DIR/.env) — available the
+    # instant bash is, on any model. Steer the one-shot to it via the system
+    # prompt so model tiering never costs us a missed reminder. Single quotes in
+    # the example keep this safe inside the bash double-quoted string.
+    local tg_send_prompt="SCHEDULED ONE-SHOT: the Telegram MCP tool may not be connected in time in this run. To send ANY Telegram message, use the Bash tool to run: python3 $SCRIPT_DIR/tg_send.py <chat_id> '<message text>'  — it sends instantly via the Bot API (TELEGRAM_STATE_DIR is already set to your bot). Prefer this over the mcp telegram reply tool for all sends in this run; do not conclude you are unable to message the user."
+
     # Run in background — scheduler shouldn't block on claude's execution time
     (
         cd "$workspace"
@@ -172,6 +181,7 @@ except Exception:
             TELEGRAM_SEND_ONLY=1 \
             "$CLAUDE_BIN" -p "SCHEDULED TASK [$tid]: $desc" \
             --model "$task_model" \
+            --append-system-prompt "$tg_send_prompt" \
             --dangerously-skip-permissions \
             --mcp-config "$mcp_config" \
             >> "$push_log" 2>&1
