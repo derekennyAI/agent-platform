@@ -130,6 +130,26 @@ with open('$agent_plist', 'rb') as f:
     # dir (incl. -cron) and is idempotent.
     /opt/homebrew/bin/python3 "$HOME/agent-platform/scripts/patch_telegram_plugin.py" >/dev/null 2>&1 || true
 
+    # Per-task model tiering: each scheduled task runs on the cheapest model that
+    # won't degrade it (haiku/sonnet/opus), mapped in task_models.json (tid ->
+    # model id). Lives in $SCRIPT_DIR so the Supabase->local scheduled_tasks.json
+    # sync never clobbers it. Default to the most capable model when a task is
+    # unmapped — never silently downgrade something unclassified. tid is passed
+    # as argv (not interpolated) to avoid id-injection, matching the writeback
+    # block below. See classify_task_model.py for how the map is generated.
+    local task_model
+    task_model=$(/opt/homebrew/bin/python3 -c "
+import json, os, sys
+tid = sys.argv[1]
+p = os.path.join('$SCRIPT_DIR', 'task_models.json')
+try:
+    print(json.load(open(p)).get(tid, '') or 'claude-opus-4-8')
+except Exception:
+    print('claude-opus-4-8')
+" "$tid" 2>/dev/null)
+    [ -z "$task_model" ] && task_model="claude-opus-4-8"
+    infra_info "$COMP" "PUSH_MODEL $tid ($agent): $task_model"
+
     # Run in background — scheduler shouldn't block on claude's execution time
     (
         cd "$workspace"
@@ -143,6 +163,7 @@ with open('$agent_plist', 'rb') as f:
             ${tg_state_dir:+TELEGRAM_STATE_DIR="$tg_state_dir"} \
             TELEGRAM_SEND_ONLY=1 \
             "$CLAUDE_BIN" -p "SCHEDULED TASK [$tid]: $desc" \
+            --model "$task_model" \
             --dangerously-skip-permissions \
             --mcp-config "$mcp_config" \
             >> "$push_log" 2>&1

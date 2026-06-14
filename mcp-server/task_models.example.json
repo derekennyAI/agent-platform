@@ -1,0 +1,8 @@
+{
+  "sched_example_admin_poll": "claude-sonnet-4-6",
+  "sched_example_daily_memory_compact": "claude-sonnet-4-6",
+  "sched_example_session_memory": "claude-haiku-4-5",
+  "sched_example_log_rotation": "claude-haiku-4-5",
+  "sched_example_reminder": "claude-haiku-4-5",
+  "sched_example_content_pipeline": "claude-opus-4-8"
+}
