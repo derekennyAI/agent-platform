@@ -130,6 +130,31 @@ with open('$agent_plist', 'rb') as f:
     # dir (incl. -cron) and is idempotent.
     /opt/homebrew/bin/python3 "$HOME/agent-platform/scripts/patch_telegram_plugin.py" >/dev/null 2>&1 || true
 
+    # Per-task model tiering: each scheduled task runs on the cheapest model that
+    # won't degrade it (haiku/sonnet/opus). classify_task_model.py --resolve does
+    # it all in one call: map entry from task_models.json if present, else classify
+    # the description on the fly (self-heal for chat-created tasks — closes the
+    # chat->tiered-fire loop), else the safe OPUS default (never silently downgrade
+    # something unmapped). It prints "<source> <model>"; source=classified means it
+    # auto-tiered. tid passed as argv (not interpolated) to avoid id-injection.
+    local task_resolve task_src task_model
+    task_resolve=$(/opt/homebrew/bin/python3 "$SCRIPT_DIR/classify_task_model.py" --resolve "$tid" "$desc" 2>/dev/null)
+    # Empty only if the classifier itself failed to run — fall back to OPUS.
+    [ -z "$task_resolve" ] && task_resolve="default claude-opus-4-8"
+    task_src=${task_resolve%% *}
+    task_model=${task_resolve#* }
+    [ "$task_src" = "classified" ] && infra_info "$COMP" "PUSH_MODEL_AUTOCLASSIFIED $tid ($agent): $task_model"
+    infra_info "$COMP" "PUSH_MODEL $tid ($agent): $task_model"
+
+    # Reliable Telegram send for one-shots: the MCP telegram plugin cold-starts
+    # per claude -p run and a fast model (haiku) can finish before it connects,
+    # concluding "tool not available" and never sending. tg_send.py goes straight
+    # through the Bot API (token from $TELEGRAM_STATE_DIR/.env) — available the
+    # instant bash is, on any model. Steer the one-shot to it via the system
+    # prompt so model tiering never costs us a missed reminder. Single quotes in
+    # the example keep this safe inside the bash double-quoted string.
+    local tg_send_prompt="SCHEDULED ONE-SHOT: the Telegram MCP tool may not be connected in time in this run. To send ANY Telegram message, use the Bash tool to run: python3 $SCRIPT_DIR/tg_send.py <chat_id> '<message text>'  — it sends instantly via the Bot API (TELEGRAM_STATE_DIR is already set to your bot). Prefer this over the mcp telegram reply tool for all sends in this run; do not conclude you are unable to message the user."
+
     # Run in background — scheduler shouldn't block on claude's execution time
     (
         cd "$workspace"
@@ -143,6 +168,8 @@ with open('$agent_plist', 'rb') as f:
             ${tg_state_dir:+TELEGRAM_STATE_DIR="$tg_state_dir"} \
             TELEGRAM_SEND_ONLY=1 \
             "$CLAUDE_BIN" -p "SCHEDULED TASK [$tid]: $desc" \
+            --model "$task_model" \
+            --append-system-prompt "$tg_send_prompt" \
             --dangerously-skip-permissions \
             --mcp-config "$mcp_config" \
             >> "$push_log" 2>&1
